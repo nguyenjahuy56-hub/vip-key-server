@@ -68,10 +68,10 @@ function generateKey() {
 
 /**
  * POST /check-key
- * body: { key, hwid }
+ * body: { key, hwid, game }
  */
 app.post("/check-key", async (req, res) => {
-    const { key, hwid } = req.body;
+    const { key, hwid, game } = req.body;
     if (!key) return res.json({ success: false, message: "Thiếu key" });
     if (!hwid) return res.json({ success: false, message: "Thiếu hwid" });
     if (!keysCollection) return res.json({ success: false, message: "Chưa kết nối DB" });
@@ -81,6 +81,11 @@ app.post("/check-key", async (req, res) => {
 
     if (!found || (found.expire && found.expire <= now)) {
         return res.json({ success: false, message: "Key không tồn tại hoặc hết hạn" });
+    }
+
+    // CHECK GAME (Nếu key có quy định game, và client truyền lên game)
+    if (found.game && game && found.game !== game) {
+        return res.json({ success: false, message: `Key này không dùng được cho game ${game.toUpperCase()}` });
     }
 
     if (!Array.isArray(found.hwids)) found.hwids = [];
@@ -101,10 +106,10 @@ app.post("/check-key", async (req, res) => {
 
 /**
  * POST /create-key
- * body: { days, password, maxDevices }
+ * body: { days, password, maxDevices, game }
  */
 app.post("/create-key", async (req, res) => {
-    const { days, password, maxDevices } = req.body;
+    const { days, password, maxDevices, game } = req.body;
     if (password !== ADMIN_PASSWORD)
         return res.json({ success: false, message: "Sai mật khẩu" });
     if (!keysCollection) return res.json({ success: false, message: "Chưa kết nối DB" });
@@ -117,15 +122,21 @@ app.post("/create-key", async (req, res) => {
     const newKey = generateKey();
     const expire = Date.now() + (daysNum * 86400000);
 
-    const keyDoc = { key: newKey, expire, hwids: [], maxDevices: maxDevNum };
+    // Lưu thêm thuộc tính game vào DB
+    const keyDoc = { 
+        key: newKey, 
+        expire, 
+        hwids: [], 
+        maxDevices: maxDevNum,
+        game: game || "lc79" // Mặc định nếu không truyền lên
+    };
     await keysCollection.insertOne(keyDoc);
 
-    res.json({ success: true, key: newKey, expire, maxDevices: maxDevNum });
+    res.json({ success: true, key: newKey, expire, maxDevices: maxDevNum, game: keyDoc.game });
 });
 
 /**
  * POST /delete-key
- * body: { key, password }
  */
 app.post("/delete-key", async (req, res) => {
     const { key, password } = req.body;
@@ -138,7 +149,6 @@ app.post("/delete-key", async (req, res) => {
 
 /**
  * POST /reset-hwid
- * body: { key, password }
  */
 app.post("/reset-hwid", async (req, res) => {
     const { key, password } = req.body;
@@ -150,7 +160,7 @@ app.post("/reset-hwid", async (req, res) => {
 });
 
 /**
- * (Tùy chọn) POST /remove-hwid
+ * POST /remove-hwid
  */
 app.post("/remove-hwid", async (req, res) => {
     const { key, password, hwid } = req.body;
@@ -329,6 +339,9 @@ th,td{padding:10px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.
 .small{font-size:12px;color:#cbd5e1;}
 .hw-list{font-size:12px;text-align:left;color:#e2e8f0;}
 .limit-badge{background:rgba(255,255,255,0.04);padding:6px;border-radius:6px;}
+.game-badge{background:#8b5cf6;padding:4px 8px;border-radius:4px;font-weight:bold;font-size:11px;color:#fff;}
+.game-xd88{background:#d97706;}
+.game-all{background:#475569;}
 </style>
 </head>
 <body>
@@ -336,20 +349,24 @@ th,td{padding:10px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.
 <h1>🔐 VIP ADMIN PANEL</h1>
 
 <div class="card">
-<div style="display:flex;gap:12px;align-items:center;">
-    <input type="password" id="password" placeholder="Mật khẩu admin" style="max-width:260px;">
-    <select id="days" style="max-width:160px;">
+<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+    <input type="password" id="password" placeholder="Mật khẩu admin" style="max-width:200px;">
+    <select id="gameSelect" style="max-width:140px;">
+        <option value="lc79">Game: LC79</option>
+        <option value="xd88">Game: XOCDIA88</option>
+    </select>
+    <select id="days" style="max-width:140px;">
         <option value="1">1 Ngày</option>
         <option value="7" selected>7 Ngày</option>
         <option value="30">30 Ngày</option>
         <option value="365">365 Ngày</option>
     </select>
-    <input id="maxDevices" type="number" min="1" max="100" value="1" style="width:120px;" />
+    <div style="display:flex;align-items:center;gap:6px;font-size:14px;">Thiết bị: <input id="maxDevices" type="number" min="1" max="100" value="1" style="width:60px;margin:0;" /></div>
     <button class="green" onclick="createKey()">TẠO KEY</button>
     <div style="flex:1"></div>
     <button class="blue" onclick="loadKeys()">Tải danh sách</button>
 </div>
-<div class="small" style="margin-top:8px;">Khi tạo key, đặt số thiết bị tối đa được phép dùng (max devices). Mặc định 1.</div>
+<div class="small" style="margin-top:8px;">Khi tạo key, hãy chọn đúng Game để khách hàng chỉ dùng được tool bên trang game đó.</div>
 </div>
 
 <div class="card">
@@ -357,6 +374,7 @@ th,td{padding:10px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.
 <thead>
 <tr>
     <th>Key</th>
+    <th>Game</th>
     <th>Hết hạn</th>
     <th>Thiết bị (số / giới hạn)</th>
     <th>Danh sách HWID</th>
@@ -379,15 +397,22 @@ async function loadKeys(){
         const expireStr = k.expire ? new Date(k.expire).toLocaleString() : "Không có";
         const hwids = Array.isArray(k.hwids) ? k.hwids : (k.hwid ? [k.hwid] : []);
         const hwCount = hwids.length;
+        
+        let gameClass = "game-all";
+        let gameName = "ALL (Key Cũ)";
+        if(k.game === 'lc79') { gameClass = ""; gameName = "LC79"; }
+        else if(k.game === 'xd88') { gameClass = "game-xd88"; gameName = "XÓC ĐĨA 88"; }
+
         html+=\`
         <tr>
             <td>\${k.key}</td>
+            <td><span class="game-badge \${gameClass}">\${gameName}</span></td>
             <td>\${expireStr}</td>
             <td><span class="limit-badge">\${hwCount} / \${k.maxDevices||1}</span></td>
             <td class="hw-list">\${hwids.length? hwids.join("<br/>") : "<i>Chưa gán</i>"}</td>
             <td>
-                <button class="green" onclick="resetKey('\${k.key}')">Reset (Xóa tất cả thiết bị)</button>
-                <button class="red" onclick="deleteKey('\${k.key}')">Xóa Key</button>
+                <button class="green" onclick="resetKey('\${k.key}')">Reset thiết bị</button>
+                <button class="red" onclick="deleteKey('\${k.key}')">Xóa</button>
             </td>
         </tr>\`;
     });
@@ -399,16 +424,17 @@ async function createKey(){
     const days=document.getElementById("days").value;
     const password=document.getElementById("password").value;
     const maxDevices=document.getElementById("maxDevices").value || 1;
+    const game=document.getElementById("gameSelect").value;
 
     const res=await fetch("/create-key",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({days,password,maxDevices})
+        body:JSON.stringify({days,password,maxDevices,game})
     });
 
     const data=await res.json();
     if(data.success){
-        alert("Tạo thành công: " + data.key + "\\\\nMax devices: " + data.maxDevices);
+        alert("Tạo thành công: " + data.key + "\\\\nGame: " + data.game.toUpperCase() + "\\\\nMax devices: " + data.maxDevices);
     } else {
         alert("Lỗi tạo key: " + (data.message||"Unknown"));
     }
