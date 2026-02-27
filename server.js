@@ -12,11 +12,12 @@ app.use(bodyParser.json());
 // ==========================================
 const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD; // Bắt buộc phải giống trên Render
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD; 
 const ADMIN_ROUTE = process.env.ADMIN_ROUTE || "/vip-9xk2-admin";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY; 
 
-if (!MONGO_URI || !ADMIN_PASSWORD) {
-    console.error("❌ THIẾU MONGO_URI HOẶC MẬT KHẨU TRÊN RENDER!");
+if (!MONGO_URI || !ADMIN_PASSWORD || !GEMINI_API_KEY) {
+    console.error("❌ THIẾU MONGO_URI, ADMIN_PASSWORD HOẶC GEMINI_API_KEY TRÊN RENDER!");
 }
 
 const client = new MongoClient(MONGO_URI);
@@ -27,7 +28,7 @@ async function initDB() {
         await client.connect();
         const db = client.db("vip_tool_db");
         keysCollection = db.collection("keys");
-        console.log("✅ Kết nối MongoDB thành công! Đã áp dụng mật khẩu ẩn.");
+        console.log("✅ Kết nối MongoDB thành công! Đã nạp Gemini AI.");
     } catch (error) {
         console.error("❌ Lỗi kết nối MongoDB:", error);
     }
@@ -58,7 +59,7 @@ function generateKey() {
     return "KEY-" + Math.random().toString(36).substring(2, 10).toUpperCase();
 }
 
-// ================= KEY SYSTEM =================
+// ================= KEY SYSTEM (BẢO MẬT GỐC) =================
 
 app.post("/check-key", async (req, res) => {
     const { key, hwid, game } = req.body;
@@ -73,8 +74,7 @@ app.post("/check-key", async (req, res) => {
         return res.json({ success: false, message: "Key không tồn tại hoặc hết hạn" });
     }
 
-    // UPDATE: Nếu key là 'all' thì bỏ qua kiểm tra game, nếu không thì check như cũ
-    if (found.game && found.game !== "all" && game && found.game !== game) {
+    if (found.game && game && found.game !== game) {
         return res.json({ success: false, message: `Key này không dùng được cho game ${game.toUpperCase()}` });
     }
 
@@ -96,7 +96,6 @@ app.post("/check-key", async (req, res) => {
 
 app.post("/create-key", async (req, res) => {
     const { days, password, maxDevices, game } = req.body;
-    // SO SÁNH PASS NGƯỜI DÙNG NHẬP VỚI PASS TRÊN RENDER
     if (password !== ADMIN_PASSWORD) return res.json({ success: false, message: "Sai mật khẩu" });
     if (!keysCollection) return res.json({ success: false, message: "Chưa kết nối DB" });
 
@@ -143,122 +142,86 @@ app.get("/keys", async (req, res) => {
     res.json(keys);
 });
 
-// ================= FULL AI LOGIC =================
-function phanTichChuoiWeighted(chuoi){
-    const n = chuoi.length;
-    const weights = Array.from({length:n}, (_,i)=>Math.pow(2,i));
-    const rev = [...chuoi].reverse();
-
-    let tai=0, xiu=0;
-    for(let i=0;i<rev.length;i++){
-        if(rev[i]==="T") tai+=weights[i];
-        if(rev[i]==="X") xiu+=weights[i];
-    }
-    const total = weights.reduce((a,b)=>a+b,0);
-    return { ptTai: +(tai/total*100).toFixed(1), ptXiu: +(xiu/total*100).toFixed(1) };
-}
-
-function demChuoiLienTiep(chuoi, ky_tu){
-    let count=0;
-    for(let i=chuoi.length-1;i>=0;i--){
-        if(chuoi[i]===ky_tu) count++; else break;
-    }
-    return count;
-}
-
-function laCauDanXen(chuoi){
-    if(chuoi.length<6) return false;
-    for(let i=chuoi.length-6;i<chuoi.length-1;i++){
-        if(chuoi[i]===chuoi[i+1]) return false;
-    }
-    return true;
-}
-
-function phanTichChuKy(chuoi){
-    const Ls=[5,4,3,2];
-    for(const l of Ls){
-        if(chuoi.length>=2*l){
-            const a=chuoi.slice(-l).join("");
-            const b=chuoi.slice(-2*l,-l).join("");
-            if(a===b) return chuoi[chuoi.length-1];
-        }
-    }
-    return null;
-}
-
-function phatHienCauBip(chuoi){
-    const tail6=chuoi.slice(-6).join("");
-    if(tail6==="TTTTTT"||tail6==="XXXXXX") return "Cầu bệt dài bất thường";
-    const tail5 = chuoi.slice(-5).join("");
-    if (tail5 === "TXTXX" || tail5 === "XTXTT") return "Cầu nhử đảo 1-1-2";
-    return null;
-}
-
-function duDoanFull(chuoi){
-    const {ptTai,ptXiu}=phanTichChuoiWeighted(chuoi);
-    let diem_tai=0, diem_xiu=0;
-
-    for(let l=7;l>=3;l--){
-        if(chuoi.length>=l){
-            const tail=chuoi.slice(-l);
-            if(tail.every(x=>x==="T")) diem_tai+=(l-2)*2;
-            if(tail.every(x=>x==="X")) diem_xiu+=(l-2)*2;
-        }
-    }
-
-    const ck=phanTichChuKy(chuoi);
-    if(ck==="T") diem_tai+=5;
-    if(ck==="X") diem_xiu+=5;
-
-    if(laCauDanXen(chuoi)){
-        if(chuoi[chuoi.length-1]==="T") diem_xiu+=4;
-        else diem_tai+=4;
-    }
-
-    const lt_t=demChuoiLienTiep(chuoi,"T");
-    const lt_x=demChuoiLienTiep(chuoi,"X");
-
-    if(lt_t>=3) diem_tai+=Math.pow(2,lt_t-2);
-    if(lt_x>=3) diem_xiu+=Math.pow(2,lt_x-2);
-
-    diem_tai+=ptTai/10;
-    diem_xiu+=ptXiu/10;
-
-    let ket_qua="Không rõ";
-    if(diem_tai>diem_xiu+1) ket_qua="Tài";
-    else if(diem_xiu>diem_tai+1) ket_qua="Xỉu";
-
-    return { ket_qua, ptTai, ptXiu, cau_bip: phatHienCauBip(chuoi) };
-}
+// ================= FULL AI LOGIC & TỰ HỌC LỖI SAI =================
 
 app.post("/predict", async (req, res) => {
-    const {chuoi,key,hwid} = req.body;
+    const { chuoi, key, hwid, lich_su_sai } = req.body;
 
-    if(!Array.isArray(chuoi)) return res.json({success:false, message: "chuoi invalid"});
-    if(!keysCollection) return res.json({success:false, message: "Server DB chưa sẵn sàng"});
+    if (!Array.isArray(chuoi)) return res.json({ success: false, message: "Chuỗi dữ liệu không hợp lệ" });
+    if (!keysCollection) return res.json({ success: false, message: "Server DB chưa sẵn sàng" });
 
+    // 1. Kiểm tra Key và HWID (Giữ bảo mật)
     const found = await keysCollection.findOne({ key: key });
-    if(!found || (found.expire && found.expire <= Date.now())) {
-        return res.json({success:false, message: "Key invalid hoặc hết hạn"});
+    if (!found || (found.expire && found.expire <= Date.now())) {
+        return res.json({ success: false, message: "Key invalid hoặc hết hạn" });
     }
 
-    if(!Array.isArray(found.hwids)) found.hwids = [];
+    if (!Array.isArray(found.hwids)) found.hwids = [];
     const maxDev = found.maxDevices || 1;
 
-    if(found.hwids.length > 0 && !found.hwids.includes(hwid) && found.hwids.length >= maxDev) {
-        return res.json({ success:false, message: `Key đã đạt tối đa ${maxDev} thiết bị` });
+    if (found.hwids.length > 0 && !found.hwids.includes(hwid) && found.hwids.length >= maxDev) {
+        return res.json({ success: false, message: `Key đã đạt tối đa ${maxDev} thiết bị` });
     }
     
-    if(hwid && !found.hwids.includes(hwid) && found.hwids.length < maxDev) {
+    if (hwid && !found.hwids.includes(hwid) && found.hwids.length < maxDev) {
         found.hwids.push(hwid);
         await keysCollection.updateOne({ key: key }, { $set: { hwids: found.hwids } });
     }
 
-    const result = duDoanFull(chuoi);
-    res.json({ success:true, ...result });
+    // 2. GỌI AI PHÂN TÍCH CHUỖI VÀ TỰ SỬA SAI
+    try {
+        let phanTuHoc = "";
+        if (lich_su_sai && lich_su_sai.du_doan_cu) {
+            phanTuHoc = `LƯU Ý QUAN TRỌNG TỪ HỆ THỐNG: Ở ván trước, bạn đã dự đoán là "${lich_su_sai.du_doan_cu}" nhưng kết quả thực tế lại về "${lich_su_sai.ket_qua_thuc}". Điều này chứng tỏ thuật toán nhận diện nhịp cầu của bạn đang bị nhà cái bẻ. Hãy thay đổi góc nhìn, lật ngược lại tư duy phân tích nhịp cầu ở ván này để sửa sai, tuyệt đối không đi vào lối mòn cũ!`;
+        }
+
+        const prompt = `Bạn là hệ thống AI phân tích thống kê xác suất nâng cao trò chơi. 
+        Dựa trên chuỗi kết quả lịch sử sau (xếp từ ván cũ nhất đến ván mới nhất): ${chuoi.join(", ")}.
+        
+        ${phanTuHoc}
+
+        Hãy phân tích quy luật (cầu bệt, cầu nhảy, cầu 1-1, 1-2...) và dự đoán kết quả tiếp theo.
+        BẮT BUỘC TRẢ VỀ CHỈ MỘT ĐỐI TƯỢNG JSON ĐÚNG ĐỊNH DẠNG SAU, KHÔNG XUẤT HIỆN BẤT KỲ VĂN BẢN HAY DẤU MARKDOWN NÀO KHÁC BÊN NGOÀI JSON:
+        {
+            "ket_qua": "Tài" hoặc "Xỉu",
+            "ptTai": <tỷ lệ % ra Tài, là số nguyên từ 0 đến 100>,
+            "ptXiu": <tỷ lệ % ra Xỉu, là số nguyên từ 0 đến 100>
+        }`;
+
+        const aiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }]
+            })
+        });
+
+        const aiData = await aiResponse.json();
+        
+        if (aiData.error) {
+            throw new Error(aiData.error.message);
+        }
+
+        const textResult = aiData.candidates[0].content.parts[0].text;
+        
+        // Làm sạch dữ liệu JSON trả về (phòng hờ Gemini kẹp markdown ```json)
+        const cleanJson = textResult.replace(/```json/gi, "").replace(/```/gi, "").trim();
+        const result = JSON.parse(cleanJson);
+
+        res.json({ success: true, ...result });
+
+    } catch (error) {
+        console.error("Lỗi khi gọi AI:", error);
+        res.json({ 
+            success: true, 
+            ket_qua: "Không rõ", 
+            ptTai: 50, 
+            ptXiu: 50 
+        });
+    }
 });
 
-// ================= ADMIN HTML =================
+// ================= ADMIN HTML (GIỮ NGUYÊN GIAO DIỆN ADMIN) =================
 app.get(ADMIN_ROUTE, (req, res) => {
 res.send(`<!DOCTYPE html>
 <html>
@@ -286,13 +249,12 @@ th,td{padding:10px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.
 </head>
 <body>
 <div class="container">
-<h1>🔐 VIP ADMIN PANEL</h1>
+<h1>🔐 VIP ADMIN PANEL - AI MODE</h1>
 
 <div class="card">
 <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
     <input type="password" id="password" placeholder="Mật khẩu admin" style="max-width:200px;">
     <select id="gameSelect" style="max-width:140px;">
-        <option value="all">TẤT CẢ GAME</option>
         <option value="lc79">Game: LC79</option>
         <option value="xd88">Game: XOCDIA88</option>
     </select>
@@ -340,11 +302,9 @@ async function loadKeys(){
         const hwCount = hwids.length;
         
         let gameClass = "game-all";
-        let gameName = "TẤT CẢ GAME";
-        
+        let gameName = "ALL (Key Cũ)";
         if(k.game === 'lc79') { gameClass = ""; gameName = "LC79"; }
         else if(k.game === 'xd88') { gameClass = "game-xd88"; gameName = "XÓC ĐĨA 88"; }
-        // Nếu không thuộc 2 cái trên và cũng không phải 'all', giữ mặc định là game-all cho key cũ
 
         html+=\`
         <tr>
@@ -377,7 +337,7 @@ async function createKey(){
 
     const data=await res.json();
     if(data.success){
-        alert("Tạo thành công: " + data.key + "\\\\nGame: " + data.game.toUpperCase() + "\\\\nMax devices: " + data.maxDevices);
+        alert("Tạo thành công: " + data.key + "\\nGame: " + data.game.toUpperCase() + "\\nMax devices: " + data.maxDevices);
     } else {
         alert("Lỗi tạo key: " + (data.message||"Unknown"));
     }
