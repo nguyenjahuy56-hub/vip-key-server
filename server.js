@@ -1,4 +1,3 @@
-// server.js
 const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
@@ -8,12 +7,18 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-const PORT = 3000;
+// ==========================================
+// KÉO BẢO MẬT TỪ BẢNG ENVIRONMENT TRÊN RENDER
+// ==========================================
+const PORT = process.env.PORT || 3000;
+const MONGO_URI = process.env.MONGO_URI;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD; // Bắt buộc phải giống trên Render
+const ADMIN_ROUTE = process.env.ADMIN_ROUTE || "/vip-9xk2-admin";
 
-// ==========================================
-// MONGODB CONFIG - ĐIỀN MẬT KHẨU VÀO ĐÂY
-// ==========================================
-const MONGO_URI = "mongodb+srv://nguyenjahuy56_db_user:D1382010@cluster0.siscrvu.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
+if (!MONGO_URI || !ADMIN_PASSWORD) {
+    console.error("❌ THIẾU MONGO_URI HOẶC MẬT KHẨU TRÊN RENDER!");
+}
+
 const client = new MongoClient(MONGO_URI);
 let keysCollection;
 
@@ -22,33 +27,24 @@ async function initDB() {
         await client.connect();
         const db = client.db("vip_tool_db");
         keysCollection = db.collection("keys");
-        console.log("✅ Kết nối MongoDB thành công!");
+        console.log("✅ Kết nối MongoDB thành công! Đã áp dụng mật khẩu ẩn.");
     } catch (error) {
         console.error("❌ Lỗi kết nối MongoDB:", error);
     }
 }
 initDB();
 
-const ADMIN_PASSWORD = "123456";
-const ADMIN_ROUTE = "/vip-9xk2-admin";
-
-/**
- * Hàm hỗ trợ lấy toàn bộ key hợp lệ (thay thế cho loadKeys cũ)
- * Tự động xóa các key đã hết hạn khỏi DB cho nhẹ
- */
 async function loadValidKeys() {
     if (!keysCollection) return [];
     const now = Date.now();
     let keys = await keysCollection.find({}).toArray();
 
-    // Lọc key đã hết hạn và xóa khỏi DB
     const expiredKeys = keys.filter(k => k.expire && k.expire <= now);
     if (expiredKeys.length > 0) {
         const expiredKeyStrings = expiredKeys.map(k => k.key);
         await keysCollection.deleteMany({ key: { $in: expiredKeyStrings } });
     }
 
-    // Fix lỗi data cũ nếu thiếu maxDevices hoặc hwids chưa là array
     let validKeys = keys.filter(k => !k.expire || k.expire > now).map(k => {
         if (!Array.isArray(k.hwids)) k.hwids = k.hwid ? [k.hwid] : [];
         if (typeof k.maxDevices !== 'number' || isNaN(k.maxDevices) || k.maxDevices < 1) k.maxDevices = 1;
@@ -62,14 +58,8 @@ function generateKey() {
     return "KEY-" + Math.random().toString(36).substring(2, 10).toUpperCase();
 }
 
-//
 // ================= KEY SYSTEM =================
-//
 
-/**
- * POST /check-key
- * body: { key, hwid, game }
- */
 app.post("/check-key", async (req, res) => {
     const { key, hwid, game } = req.body;
     if (!key) return res.json({ success: false, message: "Thiếu key" });
@@ -83,7 +73,6 @@ app.post("/check-key", async (req, res) => {
         return res.json({ success: false, message: "Key không tồn tại hoặc hết hạn" });
     }
 
-    // CHECK GAME (Nếu key có quy định game, và client truyền lên game)
     if (found.game && game && found.game !== game) {
         return res.json({ success: false, message: `Key này không dùng được cho game ${game.toUpperCase()}` });
     }
@@ -104,40 +93,32 @@ app.post("/check-key", async (req, res) => {
     }
 });
 
-/**
- * POST /create-key
- * body: { days, password, maxDevices, game }
- */
 app.post("/create-key", async (req, res) => {
     const { days, password, maxDevices, game } = req.body;
-    if (password !== ADMIN_PASSWORD)
-        return res.json({ success: false, message: "Sai mật khẩu" });
+    // SO SÁNH PASS NGƯỜI DÙNG NHẬP VỚI PASS TRÊN RENDER
+    if (password !== ADMIN_PASSWORD) return res.json({ success: false, message: "Sai mật khẩu" });
     if (!keysCollection) return res.json({ success: false, message: "Chưa kết nối DB" });
 
     const daysNum = parseInt(days) || 1;
     let maxDevNum = parseInt(maxDevices);
     if (isNaN(maxDevNum) || maxDevNum < 1) maxDevNum = 1;
-    if (maxDevNum > 100) maxDevNum = 100; // safety cap
+    if (maxDevNum > 100) maxDevNum = 100;
 
     const newKey = generateKey();
     const expire = Date.now() + (daysNum * 86400000);
 
-    // Lưu thêm thuộc tính game vào DB
     const keyDoc = { 
         key: newKey, 
         expire, 
         hwids: [], 
         maxDevices: maxDevNum,
-        game: game || "lc79" // Mặc định nếu không truyền lên
+        game: game || "lc79" 
     };
     await keysCollection.insertOne(keyDoc);
 
     res.json({ success: true, key: newKey, expire, maxDevices: maxDevNum, game: keyDoc.game });
 });
 
-/**
- * POST /delete-key
- */
 app.post("/delete-key", async (req, res) => {
     const { key, password } = req.body;
     if (password !== ADMIN_PASSWORD) return res.json({ success: false });
@@ -147,9 +128,6 @@ app.post("/delete-key", async (req, res) => {
     res.json({ success: true });
 });
 
-/**
- * POST /reset-hwid
- */
 app.post("/reset-hwid", async (req, res) => {
     const { key, password } = req.body;
     if (password !== ADMIN_PASSWORD) return res.json({ success: false });
@@ -159,33 +137,12 @@ app.post("/reset-hwid", async (req, res) => {
     res.json({ success: true });
 });
 
-/**
- * POST /remove-hwid
- */
-app.post("/remove-hwid", async (req, res) => {
-    const { key, password, hwid } = req.body;
-    if (password !== ADMIN_PASSWORD) return res.json({ success: false });
-    if (!key || !hwid) return res.json({ success: false });
-    if (!keysCollection) return res.json({ success: false });
-
-    const found = await keysCollection.findOne({ key: key });
-    if (!found) return res.json({ success: false });
-
-    let hwids = Array.isArray(found.hwids) ? found.hwids : [];
-    hwids = hwids.filter(h => h !== hwid);
-    await keysCollection.updateOne({ key: key }, { $set: { hwids: hwids } });
-
-    res.json({ success: true });
-});
-
 app.get("/keys", async (req, res) => {
     const keys = await loadValidKeys();
     res.json(keys);
 });
 
-//
-// ================= FULL AI LOGIC (SERVER ONLY) =================
-//
+// ================= FULL AI LOGIC =================
 function phanTichChuoiWeighted(chuoi){
     const n = chuoi.length;
     const weights = Array.from({length:n}, (_,i)=>Math.pow(2,i));
@@ -196,20 +153,14 @@ function phanTichChuoiWeighted(chuoi){
         if(rev[i]==="T") tai+=weights[i];
         if(rev[i]==="X") xiu+=weights[i];
     }
-
     const total = weights.reduce((a,b)=>a+b,0);
-
-    return {
-        ptTai: +(tai/total*100).toFixed(1),
-        ptXiu: +(xiu/total*100).toFixed(1)
-    };
+    return { ptTai: +(tai/total*100).toFixed(1), ptXiu: +(xiu/total*100).toFixed(1) };
 }
 
 function demChuoiLienTiep(chuoi, ky_tu){
     let count=0;
     for(let i=chuoi.length-1;i>=0;i--){
-        if(chuoi[i]===ky_tu) count++;
-        else break;
+        if(chuoi[i]===ky_tu) count++; else break;
     }
     return count;
 }
@@ -236,17 +187,14 @@ function phanTichChuKy(chuoi){
 
 function phatHienCauBip(chuoi){
     const tail6=chuoi.slice(-6).join("");
-    if(tail6==="TTTTTT"||tail6==="XXXXXX")
-        return "Cầu bệt dài bất thường";
+    if(tail6==="TTTTTT"||tail6==="XXXXXX") return "Cầu bệt dài bất thường";
     const tail5 = chuoi.slice(-5).join("");
     if (tail5 === "TXTXX" || tail5 === "XTXTT") return "Cầu nhử đảo 1-1-2";
     return null;
 }
 
 function duDoanFull(chuoi){
-
     const {ptTai,ptXiu}=phanTichChuoiWeighted(chuoi);
-
     let diem_tai=0, diem_xiu=0;
 
     for(let l=7;l>=3;l--){
@@ -279,12 +227,7 @@ function duDoanFull(chuoi){
     if(diem_tai>diem_xiu+1) ket_qua="Tài";
     else if(diem_xiu>diem_tai+1) ket_qua="Xỉu";
 
-    return {
-        ket_qua,
-        ptTai,
-        ptXiu,
-        cau_bip: phatHienCauBip(chuoi)
-    };
+    return { ket_qua, ptTai, ptXiu, cau_bip: phatHienCauBip(chuoi) };
 }
 
 app.post("/predict", async (req, res) => {
@@ -298,27 +241,23 @@ app.post("/predict", async (req, res) => {
         return res.json({success:false, message: "Key invalid hoặc hết hạn"});
     }
 
-    // validate hwid binding vs maxDevices
     if(!Array.isArray(found.hwids)) found.hwids = [];
     const maxDev = found.maxDevices || 1;
 
     if(found.hwids.length > 0 && !found.hwids.includes(hwid) && found.hwids.length >= maxDev) {
         return res.json({ success:false, message: `Key đã đạt tối đa ${maxDev} thiết bị` });
     }
-    // if hwid not yet bound and slots available, bind it
+    
     if(hwid && !found.hwids.includes(hwid) && found.hwids.length < maxDev) {
         found.hwids.push(hwid);
         await keysCollection.updateOne({ key: key }, { $set: { hwids: found.hwids } });
     }
 
     const result = duDoanFull(chuoi);
-
     res.json({ success:true, ...result });
 });
 
-//
 // ================= ADMIN HTML =================
-//
 app.get(ADMIN_ROUTE, (req, res) => {
 res.send(`<!DOCTYPE html>
 <html>
@@ -366,7 +305,7 @@ th,td{padding:10px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.
     <div style="flex:1"></div>
     <button class="blue" onclick="loadKeys()">Tải danh sách</button>
 </div>
-<div class="small" style="margin-top:8px;">Khi tạo key, hãy chọn đúng Game để khách hàng chỉ dùng được tool bên trang game đó.</div>
+<div class="small" style="margin-top:8px;">Nhập đúng mật khẩu trên Render mới tạo được Key.</div>
 </div>
 
 <div class="card">
@@ -468,6 +407,5 @@ loadKeys();
 });
 
 app.listen(PORT, () => {
-    console.log("Server chạy tại http://localhost:" + PORT);
-    console.log("Admin tại: http://localhost:" + PORT + ADMIN_ROUTE);
+    console.log("Server chạy tại cổng: " + PORT);
 });
