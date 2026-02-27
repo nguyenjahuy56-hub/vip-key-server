@@ -2,81 +2,60 @@
 const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
-const fs = require("fs");
-const path = require("path");
+const { MongoClient } = require("mongodb");
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
 const PORT = 3000;
-const DATA_FILE = path.join(__dirname, "keys.json");
+
+// ==========================================
+// MONGODB CONFIG - ĐIỀN MẬT KHẨU VÀO ĐÂY
+// ==========================================
+const MONGO_URI = "mongodb+srv://nguyenjahuy56_db_user:D1382010@cluster0.siscrvu.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
+const client = new MongoClient(MONGO_URI);
+let keysCollection;
+
+async function initDB() {
+    try {
+        await client.connect();
+        const db = client.db("vip_tool_db");
+        keysCollection = db.collection("keys");
+        console.log("✅ Kết nối MongoDB thành công!");
+    } catch (error) {
+        console.error("❌ Lỗi kết nối MongoDB:", error);
+    }
+}
+initDB();
 
 const ADMIN_PASSWORD = "123456";
 const ADMIN_ROUTE = "/vip-9xk2-admin";
 
-if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify([]));
-}
-
 /**
- * loadKeys:
- * - đọc file
- * - migrate: nếu key có 'hwid' (string) -> chuyển thành hwids: [hwid]
- * - nếu thiếu maxDevices -> gán mặc định 1
- * - lọc key đã hết hạn
- * - nếu migrate hoặc có keys hết hạn -> lưu lại file
+ * Hàm hỗ trợ lấy toàn bộ key hợp lệ (thay thế cho loadKeys cũ)
+ * Tự động xóa các key đã hết hạn khỏi DB cho nhẹ
  */
-function loadKeys() {
-    let raw = fs.readFileSync(DATA_FILE, "utf8");
-    let keys;
-    try {
-        keys = JSON.parse(raw);
-        if (!Array.isArray(keys)) keys = [];
-    } catch (e) {
-        keys = [];
-    }
-
+async function loadValidKeys() {
+    if (!keysCollection) return [];
     const now = Date.now();
-    let changed = false;
+    let keys = await keysCollection.find({}).toArray();
 
-    // migrate old format -> new format
-    keys = keys.map(k => {
-        const copy = Object.assign({}, k);
-        if (copy.hwid && !copy.hwids) {
-            // migrate single hwid to hwids array
-            copy.hwids = [copy.hwid];
-            delete copy.hwid;
-            changed = true;
-        }
-        if (!Array.isArray(copy.hwids)) {
-            copy.hwids = [];
-            changed = true;
-        }
-        if (typeof copy.maxDevices !== 'number' || isNaN(copy.maxDevices) || copy.maxDevices < 1) {
-            copy.maxDevices = 1;
-            changed = true;
-        }
-        return copy;
-    });
-
-    // filter expired
-    const filtered = keys.filter(k => {
-        if (!k.expire) return true; // if no expire, keep (optional)
-        return k.expire > now;
-    });
-
-    if (filtered.length !== keys.length) changed = true;
-
-    if (changed) {
-        fs.writeFileSync(DATA_FILE, JSON.stringify(filtered, null, 2), "utf8");
+    // Lọc key đã hết hạn và xóa khỏi DB
+    const expiredKeys = keys.filter(k => k.expire && k.expire <= now);
+    if (expiredKeys.length > 0) {
+        const expiredKeyStrings = expiredKeys.map(k => k.key);
+        await keysCollection.deleteMany({ key: { $in: expiredKeyStrings } });
     }
 
-    return filtered;
-}
+    // Fix lỗi data cũ nếu thiếu maxDevices hoặc hwids chưa là array
+    let validKeys = keys.filter(k => !k.expire || k.expire > now).map(k => {
+        if (!Array.isArray(k.hwids)) k.hwids = k.hwid ? [k.hwid] : [];
+        if (typeof k.maxDevices !== 'number' || isNaN(k.maxDevices) || k.maxDevices < 1) k.maxDevices = 1;
+        return k;
+    });
 
-function saveKeys(keys) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(keys, null, 2), "utf8");
+    return validKeys;
 }
 
 function generateKey() {
@@ -90,37 +69,33 @@ function generateKey() {
 /**
  * POST /check-key
  * body: { key, hwid }
- *
- * Logic:
- *  - tìm key
- *  - nếu không tồn tại -> fail
- *  - nếu key.hwids contains hwid -> success
- *  - else nếu hwids.length < maxDevices -> push hwid, save -> success
- *  - else -> fail (đạt max thiết bị)
  */
-app.post("/check-key", (req, res) => {
+app.post("/check-key", async (req, res) => {
     const { key, hwid } = req.body;
     if (!key) return res.json({ success: false, message: "Thiếu key" });
     if (!hwid) return res.json({ success: false, message: "Thiếu hwid" });
+    if (!keysCollection) return res.json({ success: false, message: "Chưa kết nối DB" });
 
-    const keys = loadKeys();
-    const found = keys.find(k => k.key === key);
+    const now = Date.now();
+    const found = await keysCollection.findOne({ key: key });
 
-    if (!found) return res.json({ success: false, message: "Key không tồn tại" });
+    if (!found || (found.expire && found.expire <= now)) {
+        return res.json({ success: false, message: "Key không tồn tại hoặc hết hạn" });
+    }
 
-    // ensure hwids array present
     if (!Array.isArray(found.hwids)) found.hwids = [];
+    const maxDev = found.maxDevices || 1;
 
     if (found.hwids.includes(hwid)) {
         return res.json({ success: true });
     }
 
-    if (found.hwids.length < (found.maxDevices || 1)) {
+    if (found.hwids.length < maxDev) {
         found.hwids.push(hwid);
-        saveKeys(keys);
+        await keysCollection.updateOne({ key: key }, { $set: { hwids: found.hwids } });
         return res.json({ success: true });
     } else {
-        return res.json({ success: false, message: `Key đã đạt tối đa ${found.maxDevices} thiết bị` });
+        return res.json({ success: false, message: `Key đã đạt tối đa ${maxDev} thiết bị` });
     }
 });
 
@@ -128,22 +103,22 @@ app.post("/check-key", (req, res) => {
  * POST /create-key
  * body: { days, password, maxDevices }
  */
-app.post("/create-key", (req, res) => {
+app.post("/create-key", async (req, res) => {
     const { days, password, maxDevices } = req.body;
     if (password !== ADMIN_PASSWORD)
         return res.json({ success: false, message: "Sai mật khẩu" });
+    if (!keysCollection) return res.json({ success: false, message: "Chưa kết nối DB" });
 
     const daysNum = parseInt(days) || 1;
     let maxDevNum = parseInt(maxDevices);
     if (isNaN(maxDevNum) || maxDevNum < 1) maxDevNum = 1;
     if (maxDevNum > 100) maxDevNum = 100; // safety cap
 
-    const keys = loadKeys();
     const newKey = generateKey();
     const expire = Date.now() + (daysNum * 86400000);
 
-    keys.push({ key: newKey, expire, hwids: [], maxDevices: maxDevNum });
-    saveKeys(keys);
+    const keyDoc = { key: newKey, expire, hwids: [], maxDevices: maxDevNum };
+    await keysCollection.insertOne(keyDoc);
 
     res.json({ success: true, key: newKey, expire, maxDevices: maxDevNum });
 });
@@ -152,60 +127,50 @@ app.post("/create-key", (req, res) => {
  * POST /delete-key
  * body: { key, password }
  */
-app.post("/delete-key", (req, res) => {
+app.post("/delete-key", async (req, res) => {
     const { key, password } = req.body;
-    if (password !== ADMIN_PASSWORD)
-        return res.json({ success: false });
+    if (password !== ADMIN_PASSWORD) return res.json({ success: false });
+    if (!keysCollection) return res.json({ success: false });
 
-    let keys = loadKeys();
-    keys = keys.filter(k => k.key !== key);
-    saveKeys(keys);
-
+    await keysCollection.deleteOne({ key: key });
     res.json({ success: true });
 });
 
 /**
  * POST /reset-hwid
  * body: { key, password }
- * -> xóa toàn bộ hwids cho key (reset gán thiết bị)
  */
-app.post("/reset-hwid", (req, res) => {
+app.post("/reset-hwid", async (req, res) => {
     const { key, password } = req.body;
-    if (password !== ADMIN_PASSWORD)
-        return res.json({ success: false });
+    if (password !== ADMIN_PASSWORD) return res.json({ success: false });
+    if (!keysCollection) return res.json({ success: false });
 
-    const keys = loadKeys();
-    const found = keys.find(k => k.key === key);
-    if (!found) return res.json({ success: false });
-
-    found.hwids = [];
-    saveKeys(keys);
-
+    await keysCollection.updateOne({ key: key }, { $set: { hwids: [] } });
     res.json({ success: true });
 });
 
 /**
  * (Tùy chọn) POST /remove-hwid
- * body: { key, password, hwid } -> remove single hwid from hwids array
  */
-app.post("/remove-hwid", (req, res) => {
+app.post("/remove-hwid", async (req, res) => {
     const { key, password, hwid } = req.body;
     if (password !== ADMIN_PASSWORD) return res.json({ success: false });
     if (!key || !hwid) return res.json({ success: false });
+    if (!keysCollection) return res.json({ success: false });
 
-    const keys = loadKeys();
-    const found = keys.find(k => k.key === key);
+    const found = await keysCollection.findOne({ key: key });
     if (!found) return res.json({ success: false });
 
-    if (!Array.isArray(found.hwids)) found.hwids = [];
-    found.hwids = found.hwids.filter(h => h !== hwid);
-    saveKeys(keys);
+    let hwids = Array.isArray(found.hwids) ? found.hwids : [];
+    hwids = hwids.filter(h => h !== hwid);
+    await keysCollection.updateOne({ key: key }, { $set: { hwids: hwids } });
+
     res.json({ success: true });
 });
 
-app.get("/keys", (req, res) => {
-    // trả đầy đủ: key, expire, hwids, maxDevices
-    res.json(loadKeys());
+app.get("/keys", async (req, res) => {
+    const keys = await loadValidKeys();
+    res.json(keys);
 });
 
 //
@@ -312,25 +277,28 @@ function duDoanFull(chuoi){
     };
 }
 
-app.post("/predict",(req,res)=>{
+app.post("/predict", async (req, res) => {
     const {chuoi,key,hwid} = req.body;
 
-    if(!Array.isArray(chuoi))
-        return res.json({success:false, message: "chuoi invalid"});
+    if(!Array.isArray(chuoi)) return res.json({success:false, message: "chuoi invalid"});
+    if(!keysCollection) return res.json({success:false, message: "Server DB chưa sẵn sàng"});
 
-    const keys = loadKeys();
-    const found = keys.find(k => k.key === key);
-    if(!found) return res.json({success:false, message: "Key invalid"});
+    const found = await keysCollection.findOne({ key: key });
+    if(!found || (found.expire && found.expire <= Date.now())) {
+        return res.json({success:false, message: "Key invalid hoặc hết hạn"});
+    }
 
     // validate hwid binding vs maxDevices
     if(!Array.isArray(found.hwids)) found.hwids = [];
-    if(found.hwids.length > 0 && !found.hwids.includes(hwid) && found.hwids.length >= (found.maxDevices || 1)) {
-        return res.json({ success:false, message: `Key đã đạt tối đa ${found.maxDevices} thiết bị` });
+    const maxDev = found.maxDevices || 1;
+
+    if(found.hwids.length > 0 && !found.hwids.includes(hwid) && found.hwids.length >= maxDev) {
+        return res.json({ success:false, message: `Key đã đạt tối đa ${maxDev} thiết bị` });
     }
     // if hwid not yet bound and slots available, bind it
-    if(hwid && !found.hwids.includes(hwid) && found.hwids.length < (found.maxDevices || 1)) {
+    if(hwid && !found.hwids.includes(hwid) && found.hwids.length < maxDev) {
         found.hwids.push(hwid);
-        saveKeys(keys);
+        await keysCollection.updateOne({ key: key }, { $set: { hwids: found.hwids } });
     }
 
     const result = duDoanFull(chuoi);
@@ -440,7 +408,7 @@ async function createKey(){
 
     const data=await res.json();
     if(data.success){
-        alert("Tạo thành công: " + data.key + "\\nMax devices: " + data.maxDevices);
+        alert("Tạo thành công: " + data.key + "\\\\nMax devices: " + data.maxDevices);
     } else {
         alert("Lỗi tạo key: " + (data.message||"Unknown"));
     }
