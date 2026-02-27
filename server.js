@@ -73,7 +73,8 @@ app.post("/check-key", async (req, res) => {
         return res.json({ success: false, message: "Key không tồn tại hoặc hết hạn" });
     }
 
-    if (found.game && game && found.game !== game) {
+    // UPDATE: Nếu key là 'all' thì bỏ qua kiểm tra game, nếu không thì check như cũ
+    if (found.game && found.game !== "all" && game && found.game !== game) {
         return res.json({ success: false, message: `Key này không dùng được cho game ${game.toUpperCase()}` });
     }
 
@@ -291,6 +292,7 @@ th,td{padding:10px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.
 <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
     <input type="password" id="password" placeholder="Mật khẩu admin" style="max-width:200px;">
     <select id="gameSelect" style="max-width:140px;">
+        <option value="all">TẤT CẢ GAME</option>
         <option value="lc79">Game: LC79</option>
         <option value="xd88">Game: XOCDIA88</option>
     </select>
@@ -338,9 +340,11 @@ async function loadKeys(){
         const hwCount = hwids.length;
         
         let gameClass = "game-all";
-        let gameName = "ALL (Key Cũ)";
+        let gameName = "TẤT CẢ GAME";
+        
         if(k.game === 'lc79') { gameClass = ""; gameName = "LC79"; }
         else if(k.game === 'xd88') { gameClass = "game-xd88"; gameName = "XÓC ĐĨA 88"; }
+        // Nếu không thuộc 2 cái trên và cũng không phải 'all', giữ mặc định là game-all cho key cũ
 
         html+=\`
         <tr>
