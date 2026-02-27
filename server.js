@@ -95,7 +95,6 @@ app.post("/check-key", async (req, res) => {
 
 app.post("/create-key", async (req, res) => {
     const { days, password, maxDevices, game } = req.body;
-    // SO SÁNH PASS NGƯỜI DÙNG NHẬP VỚI PASS TRÊN RENDER
     if (password !== ADMIN_PASSWORD) return res.json({ success: false, message: "Sai mật khẩu" });
     if (!keysCollection) return res.json({ success: false, message: "Chưa kết nối DB" });
 
@@ -143,18 +142,24 @@ app.get("/keys", async (req, res) => {
 });
 
 // ================= FULL AI LOGIC =================
+
+// Hướng 1: Tính trọng số tịnh tiến thay vì lũy thừa 2
 function phanTichChuoiWeighted(chuoi){
     const n = chuoi.length;
-    const weights = Array.from({length:n}, (_,i)=>Math.pow(2,i));
-    const rev = [...chuoi].reverse();
+    if (n === 0) return { ptTai: 50, ptXiu: 50 };
+    
+    // Dùng mảng [1, 2, 3...] làm trọng số, tay càng gần hiện tại trọng số càng cao
+    const weights = Array.from({length: n}, (_, i) => i + 1);
+    const rev = [...chuoi].reverse(); // Index 0 là kết quả mới nhất
 
-    let tai=0, xiu=0;
-    for(let i=0;i<rev.length;i++){
-        if(rev[i]==="T") tai+=weights[i];
-        if(rev[i]==="X") xiu+=weights[i];
+    let tai = 0, xiu = 0;
+    for(let i = 0; i < rev.length; i++){
+        const weight = weights[n - 1 - i]; // Lấy trọng số tương ứng
+        if(rev[i] === "T") tai += weight;
+        if(rev[i] === "X") xiu += weight;
     }
-    const total = weights.reduce((a,b)=>a+b,0);
-    return { ptTai: +(tai/total*100).toFixed(1), ptXiu: +(xiu/total*100).toFixed(1) };
+    const total = weights.reduce((a, b) => a + b, 0);
+    return { ptTai: +(tai / total * 100).toFixed(1), ptXiu: +(xiu / total * 100).toFixed(1) };
 }
 
 function demChuoiLienTiep(chuoi, ky_tu){
@@ -193,39 +198,49 @@ function phatHienCauBip(chuoi){
     return null;
 }
 
+// Hàm dự đoán đã dọn dẹp và áp dụng Hướng 3
 function duDoanFull(chuoi){
-    const {ptTai,ptXiu}=phanTichChuoiWeighted(chuoi);
-    let diem_tai=0, diem_xiu=0;
+    const {ptTai, ptXiu} = phanTichChuoiWeighted(chuoi);
+    let diem_tai = 0, diem_xiu = 0;
 
-    for(let l=7;l>=3;l--){
-        if(chuoi.length>=l){
-            const tail=chuoi.slice(-l);
-            if(tail.every(x=>x==="T")) diem_tai+=(l-2)*2;
-            if(tail.every(x=>x==="X")) diem_xiu+=(l-2)*2;
-        }
-    }
+    // 1. Phân tích chu kỳ
+    const ck = phanTichChuKy(chuoi);
+    if(ck === "T") diem_tai += 3;
+    if(ck === "X") diem_xiu += 3;
 
-    const ck=phanTichChuKy(chuoi);
-    if(ck==="T") diem_tai+=5;
-    if(ck==="X") diem_xiu+=5;
-
+    // 2. Phân tích cầu xen kẽ
     if(laCauDanXen(chuoi)){
-        if(chuoi[chuoi.length-1]==="T") diem_xiu+=4;
-        else diem_tai+=4;
+        if(chuoi[chuoi.length-1] === "T") diem_xiu += 3;
+        else diem_tai += 3;
     }
 
-    const lt_t=demChuoiLienTiep(chuoi,"T");
-    const lt_x=demChuoiLienTiep(chuoi,"X");
+    // 3. Logic Cầu Bệt (Hướng 3)
+    const lt_t = demChuoiLienTiep(chuoi, "T");
+    const lt_x = demChuoiLienTiep(chuoi, "X");
+    const MAX_STREAK_THUAN = 5; // Chỉ theo bệt đến tay thứ 5
 
-    if(lt_t>=3) diem_tai+=Math.pow(2,lt_t-2);
-    if(lt_x>=3) diem_xiu+=Math.pow(2,lt_x-2);
+    if (lt_t >= 3) {
+        if (lt_t <= MAX_STREAK_THUAN) diem_tai += 3; // Đang bệt thuận
+        else if (lt_t >= 7) diem_xiu += 4; // Cầu quá dài, bắt đầu bẻ sang Xỉu
+    }
+    if (lt_x >= 3) {
+        if (lt_x <= MAX_STREAK_THUAN) diem_xiu += 3; // Đang bệt thuận
+        else if (lt_x >= 7) diem_tai += 4; // Cầu quá dài, bắt đầu bẻ sang Tài
+    }
 
-    diem_tai+=ptTai/10;
-    diem_xiu+=ptXiu/10;
+    // 4. Cộng điểm từ phân tích tỷ lệ Weighted mềm mại hơn
+    diem_tai += ptTai / 20;
+    diem_xiu += ptXiu / 20;
 
-    let ket_qua="Không rõ";
-    if(diem_tai>diem_xiu+1) ket_qua="Tài";
-    else if(diem_xiu>diem_tai+1) ket_qua="Xỉu";
+    // 5. Chốt kết quả
+    let ket_qua = "Không rõ";
+    let doChenhLech = Math.abs(diem_tai - diem_xiu);
+
+    // Bắt buộc điểm lệch một chút mới đưa ra kết luận, tránh dự đoán bừa khi 50/50
+    if (doChenhLech > 0.5) {
+        if(diem_tai > diem_xiu) ket_qua = "Tài";
+        else ket_qua = "Xỉu";
+    }
 
     return { ket_qua, ptTai, ptXiu, cau_bip: phatHienCauBip(chuoi) };
 }
@@ -373,7 +388,7 @@ async function createKey(){
 
     const data=await res.json();
     if(data.success){
-        alert("Tạo thành công: " + data.key + "\\\\nGame: " + data.game.toUpperCase() + "\\\\nMax devices: " + data.maxDevices);
+        alert("Tạo thành công: " + data.key + "\\nGame: " + data.game.toUpperCase() + "\\nMax devices: " + data.maxDevices);
     } else {
         alert("Lỗi tạo key: " + (data.message||"Unknown"));
     }
