@@ -47,7 +47,7 @@ function antiSpam(req, res, next) {
     const now = Date.now();
     if (rateLimitMap.has(ip)) {
         const lastReq = rateLimitMap.get(ip);
-        if (now - lastReq < 1500) { // Chặn nếu spam nhanh hơn 1.5 giây/lần
+        if (now - lastReq < 1500) { 
             return res.json({ success: false, message: "Spam server! Vui lòng thao tác chậm lại." });
         }
     }
@@ -119,10 +119,8 @@ app.post("/check-key", antiSpam, async (req, res) => {
             found.hwids.push(hwid);
             await keysCollection.updateOne({ key: key }, { $set: { hwids: found.hwids } });
         }
-        // Khóa IP người dùng vào Token để chống share
         const token = jwt.sign({ key: key, hwid: hwid, game: found.game, ip: clientIp }, JWT_SECRET, { expiresIn: '12h' });
         
-        // CẬP NHẬT: Trả luôn expire ở đây, bảo mật dữ liệu các key khác
         return res.json({ success: true, token: token, expire: found.expire });
     } else {
         return res.json({ success: false, message: `Key đã đạt tối đa ${maxDev} thiết bị` });
@@ -154,7 +152,6 @@ app.post("/reset-hwid", async (req, res) => {
     res.json({ success: true });
 });
 
-// CẬP NHẬT: Đổi thành admin-keys và yêu cầu mật khẩu để xem danh sách
 app.post("/admin-keys", async (req, res) => {
     if (req.body.password !== ADMIN_PASSWORD) return res.json({ success: false, message: "Sai mật khẩu Admin!" });
     res.json(await loadValidKeys());
@@ -276,16 +273,31 @@ function duDoanFull(chuoi){
 app.post("/predict", antiSpam, async (req, res) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
-    if (!token) return res.json({ success: false, message: "Từ chối truy cập!" });
+    
+    // THÊM: Biến kicked = true để báo cho Client đá người dùng ra
+    if (!token) return res.json({ success: false, message: "Từ chối truy cập!", kicked: true });
 
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
         const currentIp = getClientIp(req);
 
-        // Kiểm tra IP-Lock
+        // IP-Lock
         if (decoded.ip && decoded.ip !== currentIp) {
-            return res.json({ success: false, message: "❌ Phát hiện dùng chung Token qua mạng khác! Vui lòng đăng nhập lại." });
+            return res.json({ success: false, message: "❌ Phát hiện dùng chung Token qua mạng khác! Vui lòng đăng nhập lại.", kicked: true });
         }
+
+        // ================= CƠ CHẾ KICK OUT =================
+        // Kiểm tra lại Database xem Admin có XÓA key hay Key đã HẾT HẠN chưa
+        if (keysCollection) {
+            const dbKey = await keysCollection.findOne({ key: decoded.key });
+            if (!dbKey) {
+                return res.json({ success: false, message: "❌ Key của bạn đã bị Admin XÓA! Vui lòng thoát.", kicked: true });
+            }
+            if (dbKey.expire && dbKey.expire <= Date.now()) {
+                return res.json({ success: false, message: "❌ Key của bạn đã HẾT HẠN!", kicked: true });
+            }
+        }
+        // ===================================================
 
         const { source, seqLength, invertChain, game: clientGame } = req.body;
         
@@ -338,11 +350,11 @@ app.post("/predict", antiSpam, async (req, res) => {
         res.json({ success: true, chuoiN, lastDice, ...result });
 
     } catch (err) {
-        return res.json({ success: false, message: "Phiên đăng nhập lỗi hoặc Server Game đang chặn kết nối." });
+        return res.json({ success: false, message: "Phiên đăng nhập lỗi hoặc Server Game đang chặn kết nối.", kicked: true });
     }
 });
 
-// ================= ADMIN HTML CẬP NHẬT CHỐNG LỘ KEY =================
+// ================= ADMIN HTML =================
 app.get(ADMIN_ROUTE, (req, res) => {
 res.send(`<!DOCTYPE html>
 <html>
