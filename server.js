@@ -3,7 +3,7 @@ const cors = require("cors");
 const bodyParser = require("body-parser");
 const { MongoClient } = require("mongodb");
 const jwt = require("jsonwebtoken");
-const crypto = require("crypto"); // Thêm thư viện crypto để băm dữ liệu
+const crypto = require("crypto"); 
 
 const app = express();
 app.use(cors());
@@ -56,23 +56,19 @@ function generateKey() {
     return "KEY-" + Math.random().toString(36).substring(2, 10).toUpperCase();
 }
 
-// ================= KEY SYSTEM (ĐÃ UPDATE CHỐNG FAKE HWID) =================
+// ================= KEY SYSTEM =================
 app.post("/check-key", async (req, res) => {
     const { key, hwid, game, timestamp, signature } = req.body;
     
-    // 1. Kiểm tra dữ liệu đầu vào
     if (!key || !hwid || !timestamp || !signature) {
         return res.json({ success: false, message: "Yêu cầu không hợp lệ (Thiếu chữ ký bảo mật)" });
     }
 
-    // 2. Chống Replay Attack (Nếu request quá cũ - hơn 5 phút thì hủy)
     const now = Date.now();
     if (Math.abs(now - timestamp) > 5 * 60 * 1000) {
         return res.json({ success: false, message: "Yêu cầu đã hết hạn (Timestamp invalid)" });
     }
 
-    // 3. XÁC THỰC CHỮ KÝ (CHỐNG FAKE HWID)
-    // Server tính toán lại signature dựa trên dữ liệu nhận được và Secret Key
     const expectedSignature = crypto
         .createHmac("sha256", HWID_SECRET)
         .update(hwid + timestamp)
@@ -89,7 +85,9 @@ app.post("/check-key", async (req, res) => {
     if (!found || (found.expire && found.expire <= now)) {
         return res.json({ success: false, message: "Key không tồn tại hoặc hết hạn" });
     }
-    if (found.game && game && found.game !== game) {
+    
+    // UPDATE: Cho phép key có game là 'all' vượt qua kiểm tra game cụ thể
+    if (found.game && game && found.game !== game && found.game !== 'all') {
         return res.json({ success: false, message: `Key này không dùng được cho game ${game.toUpperCase()}` });
     }
 
@@ -138,8 +136,9 @@ app.get("/keys", async (req, res) => {
 });
 
 
-// ================= ẨN TOÀN BỘ LOGIC GAME VÀO SERVER (GIỮ NGUYÊN) =================
+// ================= ẨN TOÀN BỘ LOGIC GAME VÀO SERVER =================
 
+// UPDATE: Thêm cổng BETVIP
 const API_URLS = {
     lc79: {
         normal: "https://wtx.tele68.com/v1/tx/sessions?cp=R&cl=R&pf=web&at=4479e6332082ebf7f206ae3cfcd3ff5e",
@@ -148,6 +147,10 @@ const API_URLS = {
     xd88: {
         normal: "https://taixiu.system32-cloudfare-356783752985678522.monster/api/luckydice/GetSoiCau",
         md5: "https://taixiumd5.system32-cloudfare-356783752985678522.monster/api/md5luckydice/GetSoiCau"
+    },
+    betvip: {
+        normal: "https://wtx.macminim6.online/v1/tx/sessions?cp=R&cl=R&pf=web&at=f03c4feaa20161043de2006ec62b3439",
+        md5: "https://wtxmd52.macminim6.online/v1/txmd5/sessions?cp=R&cl=R&pf=web&at=f03c4feaa20161043de2006ec62b3439"
     }
 };
 
@@ -253,10 +256,19 @@ app.post("/predict", async (req, res) => {
 
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
-        const { source, seqLength, invertChain } = req.body;
+        const { source, seqLength, invertChain, game: clientGame } = req.body;
         
-        const game = decoded.game || 'lc79';
-        const apiUrl = API_URLS[game][source || 'normal'];
+        // UPDATE: Hỗ trợ key ALL
+        let gameToFetch = decoded.game || 'lc79';
+        if (gameToFetch === 'all') {
+            gameToFetch = clientGame || 'lc79';
+        }
+        
+        if (!API_URLS[gameToFetch]) {
+            return res.json({ success: false, message: "Game không hợp lệ!" });
+        }
+
+        const apiUrl = API_URLS[gameToFetch][source || 'normal'];
         
         const timestamp = new Date().getTime();
         const fetchUrl = apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'nocache=' + timestamp;
@@ -301,17 +313,17 @@ app.post("/predict", async (req, res) => {
     }
 });
 
-// ================= ADMIN HTML (GIỮ NGUYÊN) =================
+// ================= ADMIN HTML =================
 app.get(ADMIN_ROUTE, (req, res) => {
 res.send(`<!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"><title>VIP ADMIN</title>
-<style>body{margin:0;font-family:Segoe UI;background:linear-gradient(135deg,#0f172a,#1e293b);color:white;} .container{max-width:1100px;margin:auto;padding:30px;} .card{backdrop-filter:blur(20px);background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);padding:18px;border-radius:12px;margin-bottom:18px;} .row{display:flex;gap:12px;align-items:center;} input,select{padding:8px;border-radius:8px;border:none;width:100%;margin:5px 0;background:rgba(0,0,0,0.35);color:#fff;} button{padding:8px 14px;border:none;border-radius:8px;cursor:pointer;font-weight:700;} .green{background:#16a34a;} .red{background:#ef4444;color:white;} .blue{background:#2563eb;color:white;} table{width:100%;border-collapse:collapse;margin-top:10px;} th,td{padding:10px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.06);font-size:13px;} .small{font-size:12px;color:#cbd5e1;} .hw-list{font-size:12px;text-align:left;color:#e2e8f0;} .limit-badge{background:rgba(255,255,255,0.04);padding:6px;border-radius:6px;} .game-badge{background:#8b5cf6;padding:4px 8px;border-radius:4px;font-weight:bold;font-size:11px;color:#fff;} .game-xd88{background:#d97706;} .game-all{background:#475569;}</style>
+<style>body{margin:0;font-family:Segoe UI;background:linear-gradient(135deg,#0f172a,#1e293b);color:white;} .container{max-width:1100px;margin:auto;padding:30px;} .card{backdrop-filter:blur(20px);background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);padding:18px;border-radius:12px;margin-bottom:18px;} .row{display:flex;gap:12px;align-items:center;} input,select{padding:8px;border-radius:8px;border:none;width:100%;margin:5px 0;background:rgba(0,0,0,0.35);color:#fff;} button{padding:8px 14px;border:none;border-radius:8px;cursor:pointer;font-weight:700;} .green{background:#16a34a;} .red{background:#ef4444;color:white;} .blue{background:#2563eb;color:white;} table{width:100%;border-collapse:collapse;margin-top:10px;} th,td{padding:10px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.06);font-size:13px;} .small{font-size:12px;color:#cbd5e1;} .hw-list{font-size:12px;text-align:left;color:#e2e8f0;} .limit-badge{background:rgba(255,255,255,0.04);padding:6px;border-radius:6px;} .game-badge{background:#8b5cf6;padding:4px 8px;border-radius:4px;font-weight:bold;font-size:11px;color:#fff;} .game-xd88{background:#d97706;} .game-betvip{background:#e11d48;} .game-all{background:#10b981;}</style>
 </head><body>
-<div class="container"><h1>🔐 VIP ADMIN PANEL</h1><div class="card"><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;"><input type="password" id="password" placeholder="Mật khẩu admin" style="max-width:200px;"><select id="gameSelect" style="max-width:140px;"><option value="lc79">Game: LC79</option><option value="xd88">Game: XOCDIA88</option></select><select id="days" style="max-width:140px;"><option value="1">1 Ngày</option><option value="7" selected>7 Ngày</option><option value="30">30 Ngày</option><option value="365">365 Ngày</option></select><div style="display:flex;align-items:center;gap:6px;font-size:14px;">Thiết bị: <input id="maxDevices" type="number" min="1" max="100" value="1" style="width:60px;margin:0;" /></div><button class="green" onclick="createKey()">TẠO KEY</button><div style="flex:1"></div><button class="blue" onclick="loadKeys()">Tải danh sách</button></div><div class="small" style="margin-top:8px;">Nhập đúng mật khẩu trên Render mới tạo được Key.</div></div>
+<div class="container"><h1>🔐 VIP ADMIN PANEL</h1><div class="card"><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;"><input type="password" id="password" placeholder="Mật khẩu admin" style="max-width:200px;"><select id="gameSelect" style="max-width:140px;"><option value="lc79">Game: LC79</option><option value="xd88">Game: XOCDIA88</option><option value="betvip">Game: BETVIP</option><option value="all">ALL GAMES</option></select><select id="days" style="max-width:140px;"><option value="1">1 Ngày</option><option value="7" selected>7 Ngày</option><option value="30">30 Ngày</option><option value="365">365 Ngày</option></select><div style="display:flex;align-items:center;gap:6px;font-size:14px;">Thiết bị: <input id="maxDevices" type="number" min="1" max="100" value="1" style="width:60px;margin:0;" /></div><button class="green" onclick="createKey()">TẠO KEY</button><div style="flex:1"></div><button class="blue" onclick="loadKeys()">Tải danh sách</button></div><div class="small" style="margin-top:8px;">Nhập đúng mật khẩu trên Render mới tạo được Key.</div></div>
 <div class="card"><table><thead><tr><th>Key</th><th>Game</th><th>Hết hạn</th><th>Thiết bị (số / giới hạn)</th><th>Danh sách HWID</th><th>Hành động</th></tr></thead><tbody id="tableBody"></tbody></table></div></div>
 <script>
-async function loadKeys(){ const res=await fetch("/keys"); const data=await res.json(); let html=""; data.forEach(k=>{ const expireStr = k.expire ? new Date(k.expire).toLocaleString() : "Không có"; const hwids = Array.isArray(k.hwids) ? k.hwids : (k.hwid ? [k.hwid] : []); const hwCount = hwids.length; let gameClass = "game-all"; let gameName = "ALL (Key Cũ)"; if(k.game === 'lc79') { gameClass = ""; gameName = "LC79"; } else if(k.game === 'xd88') { gameClass = "game-xd88"; gameName = "XÓC ĐĨA 88"; } html+=\`<tr><td>\${k.key}</td><td><span class="game-badge \${gameClass}">\${gameName}</span></td><td>\${expireStr}</td><td><span class="limit-badge">\${hwCount} / \${k.maxDevices||1}</span></td><td class="hw-list">\${hwids.length? hwids.join("<br/>") : "<i>Chưa gán</i>"}</td><td><button class="green" onclick="resetKey('\${k.key}')">Reset thiết bị</button> <button class="red" onclick="deleteKey('\${k.key}')">Xóa</button></td></tr>\`; }); document.getElementById("tableBody").innerHTML=html; }
+async function loadKeys(){ const res=await fetch("/keys"); const data=await res.json(); let html=""; data.forEach(k=>{ const expireStr = k.expire ? new Date(k.expire).toLocaleString() : "Không có"; const hwids = Array.isArray(k.hwids) ? k.hwids : (k.hwid ? [k.hwid] : []); const hwCount = hwids.length; let gameClass = ""; let gameName = "LC79"; if(k.game === 'xd88') { gameClass = "game-xd88"; gameName = "XÓC ĐĨA 88"; } else if(k.game === 'betvip') { gameClass = "game-betvip"; gameName = "BETVIP"; } else if(k.game === 'all') { gameClass = "game-all"; gameName = "ALL GAMES"; } html+=\`<tr><td>\${k.key}</td><td><span class="game-badge \${gameClass}">\${gameName}</span></td><td>\${expireStr}</td><td><span class="limit-badge">\${hwCount} / \${k.maxDevices||1}</span></td><td class="hw-list">\${hwids.length? hwids.join("<br/>") : "<i>Chưa gán</i>"}</td><td><button class="green" onclick="resetKey('\${k.key}')">Reset thiết bị</button> <button class="red" onclick="deleteKey('\${k.key}')">Xóa</button></td></tr>\`; }); document.getElementById("tableBody").innerHTML=html; }
 async function createKey(){ const days=document.getElementById("days").value; const password=document.getElementById("password").value; const maxDevices=document.getElementById("maxDevices").value || 1; const game=document.getElementById("gameSelect").value; const res=await fetch("/create-key",{ method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({days,password,maxDevices,game}) }); const data=await res.json(); if(data.success) alert("Tạo thành công: " + data.key + "\\nGame: " + data.game.toUpperCase() + "\\nMax devices: " + data.maxDevices); else alert("Lỗi tạo key: " + (data.message||"Unknown")); loadKeys(); }
 async function deleteKey(key){ const password=document.getElementById("password").value; if(!password){ alert("Nhập mật khẩu admin"); return; } if(!confirm("Xác nhận xóa key " + key + "?")) return; await fetch("/delete-key",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key,password})}); loadKeys(); }
 async function resetKey(key){ const password=document.getElementById("password").value; if(!password){ alert("Nhập mật khẩu admin"); return; } if(!confirm("Xác nhận reset thiết bị key " + key + "?")) return; await fetch("/reset-hwid",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key,password})}); loadKeys(); }
