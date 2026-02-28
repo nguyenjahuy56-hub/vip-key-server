@@ -3,6 +3,7 @@ const cors = require("cors");
 const bodyParser = require("body-parser");
 const { MongoClient } = require("mongodb");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto"); // Thêm thư viện crypto để băm dữ liệu
 
 const app = express();
 app.use(cors());
@@ -14,6 +15,9 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const ADMIN_ROUTE = process.env.ADMIN_ROUTE || "/vip-9xk2-admin";
 const JWT_SECRET = process.env.JWT_SECRET || "chuoi_ky_tu_bi_mat_chi_minh_ban_biet_123456!";
 
+// KEY BẢO MẬT ĐỂ CHỐNG FAKE HWID (Bạn phải dùng key này trong code Tool của bạn luôn)
+const HWID_SECRET = "MY_SUPER_SECRET_HWID_KEY_2026"; 
+
 if (!MONGO_URI || !ADMIN_PASSWORD) console.error("❌ THIẾU MONGO_URI HOẶC MẬT KHẨU TRÊN RENDER!");
 
 const client = new MongoClient(MONGO_URI);
@@ -24,7 +28,7 @@ async function initDB() {
         await client.connect();
         const db = client.db("vip_tool_db");
         keysCollection = db.collection("keys");
-        console.log("✅ Kết nối MongoDB thành công! Đã áp dụng mật khẩu ẩn.");
+        console.log("✅ Kết nối MongoDB thành công! Đã áp dụng bảo mật HWID.");
     } catch (error) {
         console.error("❌ Lỗi kết nối MongoDB:", error);
     }
@@ -52,13 +56,34 @@ function generateKey() {
     return "KEY-" + Math.random().toString(36).substring(2, 10).toUpperCase();
 }
 
-// ================= KEY SYSTEM =================
+// ================= KEY SYSTEM (ĐÃ UPDATE CHỐNG FAKE HWID) =================
 app.post("/check-key", async (req, res) => {
-    const { key, hwid, game } = req.body;
-    if (!key || !hwid) return res.json({ success: false, message: "Thiếu dữ liệu xác thực" });
+    const { key, hwid, game, timestamp, signature } = req.body;
+    
+    // 1. Kiểm tra dữ liệu đầu vào
+    if (!key || !hwid || !timestamp || !signature) {
+        return res.json({ success: false, message: "Yêu cầu không hợp lệ (Thiếu chữ ký bảo mật)" });
+    }
+
+    // 2. Chống Replay Attack (Nếu request quá cũ - hơn 5 phút thì hủy)
+    const now = Date.now();
+    if (Math.abs(now - timestamp) > 5 * 60 * 1000) {
+        return res.json({ success: false, message: "Yêu cầu đã hết hạn (Timestamp invalid)" });
+    }
+
+    // 3. XÁC THỰC CHỮ KÝ (CHỐNG FAKE HWID)
+    // Server tính toán lại signature dựa trên dữ liệu nhận được và Secret Key
+    const expectedSignature = crypto
+        .createHmac("sha256", HWID_SECRET)
+        .update(hwid + timestamp)
+        .digest("hex");
+
+    if (signature !== expectedSignature) {
+        return res.json({ success: false, message: "Phát hiện gian lận HWID!" });
+    }
+
     if (!keysCollection) return res.json({ success: false, message: "Chưa kết nối DB" });
 
-    const now = Date.now();
     const found = await keysCollection.findOne({ key: key });
 
     if (!found || (found.expire && found.expire <= now)) {
@@ -113,9 +138,8 @@ app.get("/keys", async (req, res) => {
 });
 
 
-// ================= ẨN TOÀN BỘ LOGIC GAME VÀO SERVER =================
+// ================= ẨN TOÀN BỘ LOGIC GAME VÀO SERVER (GIỮ NGUYÊN) =================
 
-// Các link API của game đã được giấu xuống Backend
 const API_URLS = {
     lc79: {
         normal: "https://wtx.tele68.com/v1/tx/sessions?cp=R&cl=R&pf=web&at=4479e6332082ebf7f206ae3cfcd3ff5e",
@@ -172,7 +196,6 @@ function extractResultFromItem(item) {
     return null;
 }
 
-// Logic phân tích
 function phanTichChuoiWeighted(chuoi){
     const n = chuoi.length;
     if (n === 0) return { ptTai: 50, ptXiu: 50 };
@@ -223,7 +246,6 @@ function duDoanFull(chuoi){
     return { ket_qua, ptTai, ptXiu, cau_bip: phatHienCauBip(chuoi) };
 }
 
-// API DUY NHẤT DÙNG ĐỂ GỌI TỪ FRONTEND
 app.post("/predict", async (req, res) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -233,11 +255,9 @@ app.post("/predict", async (req, res) => {
         const decoded = jwt.verify(token, JWT_SECRET);
         const { source, seqLength, invertChain } = req.body;
         
-        // Kẻ gian không thể biết server đang lấy url nào
         const game = decoded.game || 'lc79';
         const apiUrl = API_URLS[game][source || 'normal'];
         
-        // Server tự đi fetch API từ trang chủ Game
         const timestamp = new Date().getTime();
         const fetchUrl = apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'nocache=' + timestamp;
         
@@ -262,10 +282,9 @@ app.post("/predict", async (req, res) => {
             ketQuaTuApi.push(r);
         }
 
-        let chuoiN = ketQuaTuApi.reverse(); // Chuỗi gốc trả về cho UI hiển thị
+        let chuoiN = ketQuaTuApi.reverse(); 
         let chainForAnalysis = chuoiN.slice();
         
-        // Nếu Frontend yêu cầu Bẻ Chuỗi, xử lý ở Backend luôn
         if(invertChain) {
             chainForAnalysis = chainForAnalysis.map(c => c === 'T' ? 'X' : (c === 'X' ? 'T' : c));
         }
@@ -275,7 +294,6 @@ app.post("/predict", async (req, res) => {
 
         const result = duDoanFull(chainForAnalysis);
         
-        // Trả kết quả sạch tinh tươm về cho Frontend
         res.json({ success: true, chuoiN, lastDice, ...result });
 
     } catch (err) {
@@ -283,7 +301,7 @@ app.post("/predict", async (req, res) => {
     }
 });
 
-// ================= ADMIN HTML BÊN DƯỚI GIỮ NGUYÊN =================
+// ================= ADMIN HTML (GIỮ NGUYÊN) =================
 app.get(ADMIN_ROUTE, (req, res) => {
 res.send(`<!DOCTYPE html>
 <html>
