@@ -1,28 +1,25 @@
 const express = require("express");
-
 const cors = require("cors");
-
 const bodyParser = require("body-parser");
-
 const { MongoClient } = require("mongodb");
 
 const app = express();
-
 app.use(cors());
-
 app.use(bodyParser.json());
 
-// --- CONFIG ---
+// ==========================================
+// KÉO BẢO MẬT TỪ BẢNG ENVIRONMENT TRÊN RENDER
+// ==========================================
 const PORT = process.env.PORT || 3000;
-
 const MONGO_URI = process.env.MONGO_URI;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD; // Bắt buộc phải giống trên Render
+const ADMIN_ROUTE = process.env.ADMIN_ROUTE || "/vip-9xk2-admin";
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD; 
-
-const ADMIN_ROUTE = process.env.ADMIN_ROUTE || "";
+if (!MONGO_URI || !ADMIN_PASSWORD) {
+    console.error("❌ THIẾU MONGO_URI HOẶC MẬT KHẨU TRÊN RENDER!");
+}
 
 const client = new MongoClient(MONGO_URI);
-
 let keysCollection;
 
 async function initDB() {
@@ -30,56 +27,134 @@ async function initDB() {
         await client.connect();
         const db = client.db("vip_tool_db");
         keysCollection = db.collection("keys");
-        console.log("✅ Kết nối MongoDB thành công!");
+        console.log("✅ Kết nối MongoDB thành công! Đã áp dụng mật khẩu ẩn.");
     } catch (error) {
         console.error("❌ Lỗi kết nối MongoDB:", error);
     }
 }
 initDB();
 
-// --- EXTRACTION LOGIC (CỦA DŨNG) ---
-function extractListFromApiResponse(data) {
-    if (!data) return [];
-    if (Array.isArray(data.list)) return data.list;
-    if (Array.isArray(data.data)) return data.data;
-    if (Array.isArray(data.items)) return data.items;
-    if (Array.isArray(data)) return data; 
-    if (data.data && Array.isArray(data.data.list)) return data.data.list;
-    return [];
-}
+async function loadValidKeys() {
+    if (!keysCollection) return [];
+    const now = Date.now();
+    let keys = await keysCollection.find({}).toArray();
 
-function extractResultFromItem(item) {
-    if (!item) return null;
-    if ('BetSide' in item) return item.BetSide === 0 ? 'T' : 'X';
-    const keys = ['resultTruyenThong','result','resultText','ketqua','kq'];
-    for (const k of keys) {
-        if (k in item && item[k] !== undefined && item[k] !== null) {
-            const v = String(item[k]).toUpperCase();
-            if (v.includes('TAI') || v === 'T' || v === 'TÀI') return 'T';
-            if (v.includes('XIU') || v === 'X' || v === 'XỈU') return 'X';
-        }
+    const expiredKeys = keys.filter(k => k.expire && k.expire <= now);
+    if (expiredKeys.length > 0) {
+        const expiredKeyStrings = expiredKeys.map(k => k.key);
+        await keysCollection.deleteMany({ key: { $in: expiredKeyStrings } });
     }
-    return null;
+
+    let validKeys = keys.filter(k => !k.expire || k.expire > now).map(k => {
+        if (!Array.isArray(k.hwids)) k.hwids = k.hwid ? [k.hwid] : [];
+        if (typeof k.maxDevices !== 'number' || isNaN(k.maxDevices) || k.maxDevices < 1) k.maxDevices = 1;
+        return k;
+    });
+
+    return validKeys;
 }
 
-function extractDicesFromItem(item) {
-    if (!item) return null;
-    if ('FirstDice' in item && 'SecondDice' in item && 'ThirdDice' in item) {
-        return [Number(item.FirstDice), Number(item.SecondDice), Number(item.ThirdDice)];
+function generateKey() {
+    return "KEY-" + Math.random().toString(36).substring(2, 10).toUpperCase();
+}
+
+// ================= KEY SYSTEM =================
+
+app.post("/check-key", async (req, res) => {
+    const { key, hwid, game } = req.body;
+    if (!key) return res.json({ success: false, message: "Thiếu key" });
+    if (!hwid) return res.json({ success: false, message: "Thiếu hwid" });
+    if (!keysCollection) return res.json({ success: false, message: "Chưa kết nối DB" });
+
+    const now = Date.now();
+    const found = await keysCollection.findOne({ key: key });
+
+    if (!found || (found.expire && found.expire <= now)) {
+        return res.json({ success: false, message: "Key không tồn tại hoặc hết hạn" });
     }
-    if (item.detail && Array.isArray(item.detail.dices)) return item.detail.dices;
-    return null;
-}
 
-// --- AI PREDICTION LOGIC (GIỮ NGUYÊN 100%) ---
+    if (found.game && game && found.game !== game) {
+        return res.json({ success: false, message: `Key này không dùng được cho game ${game.toUpperCase()}` });
+    }
+
+    if (!Array.isArray(found.hwids)) found.hwids = [];
+    const maxDev = found.maxDevices || 1;
+
+    if (found.hwids.includes(hwid)) {
+        return res.json({ success: true });
+    }
+
+    if (found.hwids.length < maxDev) {
+        found.hwids.push(hwid);
+        await keysCollection.updateOne({ key: key }, { $set: { hwids: found.hwids } });
+        return res.json({ success: true });
+    } else {
+        return res.json({ success: false, message: `Key đã đạt tối đa ${maxDev} thiết bị` });
+    }
+});
+
+app.post("/create-key", async (req, res) => {
+    const { days, password, maxDevices, game } = req.body;
+    if (password !== ADMIN_PASSWORD) return res.json({ success: false, message: "Sai mật khẩu" });
+    if (!keysCollection) return res.json({ success: false, message: "Chưa kết nối DB" });
+
+    const daysNum = parseInt(days) || 1;
+    let maxDevNum = parseInt(maxDevices);
+    if (isNaN(maxDevNum) || maxDevNum < 1) maxDevNum = 1;
+    if (maxDevNum > 100) maxDevNum = 100;
+
+    const newKey = generateKey();
+    const expire = Date.now() + (daysNum * 86400000);
+
+    const keyDoc = { 
+        key: newKey, 
+        expire, 
+        hwids: [], 
+        maxDevices: maxDevNum,
+        game: game || "lc79" 
+    };
+    await keysCollection.insertOne(keyDoc);
+
+    res.json({ success: true, key: newKey, expire, maxDevices: maxDevNum, game: keyDoc.game });
+});
+
+app.post("/delete-key", async (req, res) => {
+    const { key, password } = req.body;
+    if (password !== ADMIN_PASSWORD) return res.json({ success: false });
+    if (!keysCollection) return res.json({ success: false });
+
+    await keysCollection.deleteOne({ key: key });
+    res.json({ success: true });
+});
+
+app.post("/reset-hwid", async (req, res) => {
+    const { key, password } = req.body;
+    if (password !== ADMIN_PASSWORD) return res.json({ success: false });
+    if (!keysCollection) return res.json({ success: false });
+
+    await keysCollection.updateOne({ key: key }, { $set: { hwids: [] } });
+    res.json({ success: true });
+});
+
+app.get("/keys", async (req, res) => {
+    const keys = await loadValidKeys();
+    res.json(keys);
+});
+
+// ================= FULL AI LOGIC =================
+
+// Hướng 1: Tính trọng số tịnh tiến thay vì lũy thừa 2
 function phanTichChuoiWeighted(chuoi){
     const n = chuoi.length;
     if (n === 0) return { ptTai: 50, ptXiu: 50 };
+    
+    // Dùng mảng [1, 2, 3...] làm trọng số, tay càng gần hiện tại trọng số càng cao
     const weights = Array.from({length: n}, (_, i) => i + 1);
-    const rev = [...chuoi].reverse();
+    const rev = [...chuoi].reverse(); // Index 0 là kết quả mới nhất
+
     let tai = 0, xiu = 0;
     for(let i = 0; i < rev.length; i++){
-        const weight = weights[n - 1 - i];
+        const weight = weights[n - 1 - i]; // Lấy trọng số tương ứng
         if(rev[i] === "T") tai += weight;
         if(rev[i] === "X") xiu += weight;
     }
@@ -123,140 +198,83 @@ function phatHienCauBip(chuoi){
     return null;
 }
 
+// Hàm dự đoán đã dọn dẹp và áp dụng Hướng 3
 function duDoanFull(chuoi){
     const {ptTai, ptXiu} = phanTichChuoiWeighted(chuoi);
     let diem_tai = 0, diem_xiu = 0;
+
+    // 1. Phân tích chu kỳ
     const ck = phanTichChuKy(chuoi);
     if(ck === "T") diem_tai += 3;
     if(ck === "X") diem_xiu += 3;
+
+    // 2. Phân tích cầu xen kẽ
     if(laCauDanXen(chuoi)){
         if(chuoi[chuoi.length-1] === "T") diem_xiu += 3;
         else diem_tai += 3;
     }
+
+    // 3. Logic Cầu Bệt (Hướng 3)
     const lt_t = demChuoiLienTiep(chuoi, "T");
     const lt_x = demChuoiLienTiep(chuoi, "X");
-    const MAX_STREAK_THUAN = 5;
+    const MAX_STREAK_THUAN = 5; // Chỉ theo bệt đến tay thứ 5
+
     if (lt_t >= 3) {
-        if (lt_t <= MAX_STREAK_THUAN) diem_tai += 3;
-        else if (lt_t >= 7) diem_xiu += 4;
+        if (lt_t <= MAX_STREAK_THUAN) diem_tai += 3; // Đang bệt thuận
+        else if (lt_t >= 7) diem_xiu += 4; // Cầu quá dài, bắt đầu bẻ sang Xỉu
     }
     if (lt_x >= 3) {
-        if (lt_x <= MAX_STREAK_THUAN) diem_xiu += 3;
-        else if (lt_x >= 7) diem_tai += 4;
+        if (lt_x <= MAX_STREAK_THUAN) diem_xiu += 3; // Đang bệt thuận
+        else if (lt_x >= 7) diem_tai += 4; // Cầu quá dài, bắt đầu bẻ sang Tài
     }
+
+    // 4. Cộng điểm từ phân tích tỷ lệ Weighted mềm mại hơn
     diem_tai += ptTai / 20;
     diem_xiu += ptXiu / 20;
+
+    // 5. Chốt kết quả
     let ket_qua = "Không rõ";
-    if (Math.abs(diem_tai - diem_xiu) > 0.5) {
+    let doChenhLech = Math.abs(diem_tai - diem_xiu);
+
+    // Bắt buộc điểm lệch một chút mới đưa ra kết luận, tránh dự đoán bừa khi 50/50
+    if (doChenhLech > 0.5) {
         if(diem_tai > diem_xiu) ket_qua = "Tài";
         else ket_qua = "Xỉu";
     }
+
     return { ket_qua, ptTai, ptXiu, cau_bip: phatHienCauBip(chuoi) };
 }
 
-// --- ENDPOINT DỰ ĐOÁN (ĐỒNG BỘ VỚI INDEX.HTML) ---
 app.post("/predict", async (req, res) => {
-    const { key, hwid, game, source, seqLen } = req.body;
-    
-    if (!key || !hwid) return res.json({ success: false, message: "Thiếu thông tin xác thực" });
+    const {chuoi,key,hwid} = req.body;
+
+    if(!Array.isArray(chuoi)) return res.json({success:false, message: "chuoi invalid"});
+    if(!keysCollection) return res.json({success:false, message: "Server DB chưa sẵn sàng"});
 
     const found = await keysCollection.findOne({ key: key });
+    if(!found || (found.expire && found.expire <= Date.now())) {
+        return res.json({success:false, message: "Key invalid hoặc hết hạn"});
+    }
+
+    if(!Array.isArray(found.hwids)) found.hwids = [];
+    const maxDev = found.maxDevices || 1;
+
+    if(found.hwids.length > 0 && !found.hwids.includes(hwid) && found.hwids.length >= maxDev) {
+        return res.json({ success:false, message: `Key đã đạt tối đa ${maxDev} thiết bị` });
+    }
     
-    if (!found || (found.expire && found.expire <= Date.now())) {
-        return res.json({ success: false, message: "Key lậu hoặc hết hạn" });
+    if(hwid && !found.hwids.includes(hwid) && found.hwids.length < maxDev) {
+        found.hwids.push(hwid);
+        await keysCollection.updateOne({ key: key }, { $set: { hwids: found.hwids } });
     }
 
-    if (found.game && game && found.game !== game) {
-        return res.json({ success: false, message: `Key không dùng được cho \${game.toUpperCase()}` });
-    }
-
-    if (Array.isArray(found.hwids) && found.hwids.length >= (found.maxDevices || 1) && !found.hwids.includes(hwid)) {
-        return res.json({ success: false, message: "Hết lượt dùng máy" });
-    }
-
-    if (hwid && !found.hwids.includes(hwid)) {
-        await keysCollection.updateOne({ key: key }, { $push: { hwids: hwid } });
-    }
-
-    let API_URL = "";
-    if (game === 'lc79') {
-        API_URL = (source === 'md5') 
-            ? "https://wtxmd52.tele68.com/v1/txmd5/sessions?cp=R&cl=R&pf=web&at=93b3e543d609af0351163f3ff9a2c495"
-            : "https://wtx.tele68.com/v1/tx/sessions?cp=R&cl=R&pf=web&at=4479e6332082ebf7f206ae3cfcd3ff5e";
-    } else {
-        API_URL = (source === 'md5')
-            ? "https://taixiumd5.system32-cloudfare-356783752985678522.monster/api/md5luckydice/GetSoiCau"
-            : "https://taixiu.system32-cloudfare-356783752985678522.monster/api/luckydice/GetSoiCau";
-    }
-
-    try {
-        const response = await fetch(API_URL, {
-            headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            }
-        });
-        const data = await response.json();
-        const list = extractListFromApiResponse(data);
-        if (!list.length) return res.json({ success: false, message: "Không lấy được dữ liệu" });
-
-        let ketQuaTuApi = [];
-        let limit = parseInt(seqLen) || 13;
-        for (let i = 0; i < Math.min(limit, list.length); i++) {
-            let r = extractResultFromItem(list[i]);
-            if (r) ketQuaTuApi.push(r);
-        }
-
-        const chuoiN = ketQuaTuApi.reverse();
-        const lastDice = extractDicesFromItem(list[0]) || [];
-        const result = duDoanFull(chuoiN);
-
-        res.json({ success: true, chuoi: chuoiN.join(""), lastDice, ...result });
-    } catch (err) {
-        res.json({ success: false, message: "Lỗi kết nối Game API" });
-    }
+    const result = duDoanFull(chuoi);
+    res.json({ success:true, ...result });
 });
 
-// --- QUẢN LÝ KEY (GIỮ NGUYÊN) ---
-app.post("/check-key", async (req, res) => {
-    const { key, hwid, game } = req.body;
-    const found = await keysCollection.findOne({ key: key });
-    if (!found || (found.expire && found.expire <= Date.now())) return res.json({ success: false, message: "Key hỏng" });
-    if (!found.hwids.includes(hwid) && found.hwids.length >= (found.maxDevices || 1)) return res.json({ success: false, message: "Hết slot" });
-    if (!found.hwids.includes(hwid)) await keysCollection.updateOne({ key: key }, { $push: { hwids: hwid } });
-    res.json({ success: true });
-});
-
-app.post("/create-key", async (req, res) => {
-    const { days, password, maxDevices, game } = req.body;
-    if (password !== ADMIN_PASSWORD) return res.json({ success: false, message: "Sai pass" });
-    const newKey = "KEY-" + Math.random().toString(36).substring(2, 10).toUpperCase();
-    await keysCollection.insertOne({ key: newKey, expire: Date.now() + (parseInt(days) * 86400000), hwids: [], maxDevices: parseInt(maxDevices) || 1, game: game || "lc79" });
-    res.json({ success: true, key: newKey });
-});
-
-app.post("/delete-key", async (req, res) => {
-    const { key, password } = req.body;
-    if (password !== ADMIN_PASSWORD) return res.json({ success: false });
-    await keysCollection.deleteOne({ key: key });
-    res.json({ success: true });
-});
-
-app.post("/reset-hwid", async (req, res) => {
-    const { key, password } = req.body;
-    if (password !== ADMIN_PASSWORD) return res.json({ success: false });
-    await keysCollection.updateOne({ key: key }, { $set: { hwids: [] } });
-    res.json({ success: true });
-});
-
-app.get("/keys", async (req, res) => {
-    const now = Date.now();
-    let keys = await keysCollection.find({}).toArray();
-    res.json(keys.filter(k => !k.expire || k.expire > now));
-});
-
-// --- ADMIN PANEL (GIỮ NGUYÊN 100% GIAO DIỆN) ---
+// ================= ADMIN HTML =================
 app.get(ADMIN_ROUTE, (req, res) => {
-    res.send(`<!DOCTYPE html>
+res.send(`<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
@@ -276,11 +294,14 @@ th,td{padding:10px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.
 .hw-list{font-size:12px;text-align:left;color:#e2e8f0;}
 .limit-badge{background:rgba(255,255,255,0.04);padding:6px;border-radius:6px;}
 .game-badge{background:#8b5cf6;padding:4px 8px;border-radius:4px;font-weight:bold;font-size:11px;color:#fff;}
+.game-xd88{background:#d97706;}
+.game-all{background:#475569;}
 </style>
 </head>
 <body>
 <div class="container">
 <h1>🔐 VIP ADMIN PANEL</h1>
+
 <div class="card">
 <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
     <input type="password" id="password" placeholder="Mật khẩu admin" style="max-width:200px;">
@@ -299,64 +320,107 @@ th,td{padding:10px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.
     <div style="flex:1"></div>
     <button class="blue" onclick="loadKeys()">Tải danh sách</button>
 </div>
+<div class="small" style="margin-top:8px;">Nhập đúng mật khẩu trên Render mới tạo được Key.</div>
 </div>
+
 <div class="card">
 <table>
 <thead>
-<tr><th>Key</th><th>Game</th><th>Hết hạn</th><th>Thiết bị</th><th>Danh sách HWID</th><th>Hành động</th></tr>
+<tr>
+    <th>Key</th>
+    <th>Game</th>
+    <th>Hết hạn</th>
+    <th>Thiết bị (số / giới hạn)</th>
+    <th>Danh sách HWID</th>
+    <th>Hành động</th>
+</tr>
 </thead>
 <tbody id="tableBody"></tbody>
 </table>
 </div>
+
 </div>
+
 <script>
 async function loadKeys(){
     const res=await fetch("/keys");
     const data=await res.json();
+
     let html="";
     data.forEach(k=>{
-        const expireStr = k.expire ? new Date(k.expire).toLocaleString() : "N/A";
-        const hwids = Array.isArray(k.hwids) ? k.hwids : [];
-        let gameName = k.game === 'lc79' ? 'LC79' : 'XOCDIA88';
-        html+=\`<tr>
+        const expireStr = k.expire ? new Date(k.expire).toLocaleString() : "Không có";
+        const hwids = Array.isArray(k.hwids) ? k.hwids : (k.hwid ? [k.hwid] : []);
+        const hwCount = hwids.length;
+        
+        let gameClass = "game-all";
+        let gameName = "ALL (Key Cũ)";
+        if(k.game === 'lc79') { gameClass = ""; gameName = "LC79"; }
+        else if(k.game === 'xd88') { gameClass = "game-xd88"; gameName = "XÓC ĐĨA 88"; }
+
+        html+=\`
+        <tr>
             <td>\${k.key}</td>
-            <td><span class="game-badge">\${gameName}</span></td>
+            <td><span class="game-badge \${gameClass}">\${gameName}</span></td>
             <td>\${expireStr}</td>
-            <td><span class="limit-badge">\${hwids.length}/\${k.maxDevices}</span></td>
-            <td class="hw-list">\${hwids.join("<br/>") || "Trống"}</td>
+            <td><span class="limit-badge">\${hwCount} / \${k.maxDevices||1}</span></td>
+            <td class="hw-list">\${hwids.length? hwids.join("<br/>") : "<i>Chưa gán</i>"}</td>
             <td>
-                <button class="green" onclick="resetKey('\${k.key}')">Reset</button>
+                <button class="green" onclick="resetKey('\${k.key}')">Reset thiết bị</button>
                 <button class="red" onclick="deleteKey('\${k.key}')">Xóa</button>
             </td>
         </tr>\`;
     });
+
     document.getElementById("tableBody").innerHTML=html;
 }
+
 async function createKey(){
     const days=document.getElementById("days").value;
     const password=document.getElementById("password").value;
-    const maxDevices=document.getElementById("maxDevices").value;
+    const maxDevices=document.getElementById("maxDevices").value || 1;
     const game=document.getElementById("gameSelect").value;
-    const res=await fetch("/create-key",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({days,password,maxDevices,game})});
+
+    const res=await fetch("/create-key",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({days,password,maxDevices,game})
+    });
+
     const data=await res.json();
-    if(data.success) alert("Key: " + data.key);
-    else alert("Lỗi: " + data.message);
+    if(data.success){
+        alert("Tạo thành công: " + data.key + "\\nGame: " + data.game.toUpperCase() + "\\nMax devices: " + data.maxDevices);
+    } else {
+        alert("Lỗi tạo key: " + (data.message||"Unknown"));
+    }
     loadKeys();
 }
+
 async function deleteKey(key){
     const password=document.getElementById("password").value;
-    if(confirm("Xóa?")) await fetch("/delete-key",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key,password})});
+    if(!password){ alert("Nhập mật khẩu admin"); return; }
+    if(!confirm("Xác nhận xóa key " + key + "?")) return;
+    await fetch("/delete-key",{method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({key,password})});
     loadKeys();
 }
+
 async function resetKey(key){
     const password=document.getElementById("password").value;
-    await fetch("/reset-hwid",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key,password})});
+    if(!password){ alert("Nhập mật khẩu admin"); return; }
+    if(!confirm("Xác nhận reset (xóa toàn bộ thiết bị) cho key " + key + "?")) return;
+    await fetch("/reset-hwid",{method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({key,password})});
     loadKeys();
 }
+
 loadKeys();
 </script>
 </body>
-</html>\`);
+</html>`);
 });
 
-app.listen(PORT, () => console.log("Server running on port: " + PORT));
+app.listen(PORT, () => {
+    console.log("Server chạy tại cổng: " + PORT);
+});
