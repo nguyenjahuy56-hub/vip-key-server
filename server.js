@@ -35,6 +35,26 @@ async function initDB() {
 }
 initDB();
 
+// ================= HÀM LẤY IP & CHỐNG SPAM (MỚI) =================
+const getClientIp = (req) => {
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    return ip ? ip.split(',')[0].trim() : 'unknown';
+};
+
+const rateLimitMap = new Map();
+function antiSpam(req, res, next) {
+    const ip = getClientIp(req);
+    const now = Date.now();
+    if (rateLimitMap.has(ip)) {
+        const lastReq = rateLimitMap.get(ip);
+        if (now - lastReq < 1500) { // Chặn nếu spam nhanh hơn 1.5 giây/lần
+            return res.json({ success: false, message: "Spam server! Vui lòng thao tác chậm lại." });
+        }
+    }
+    rateLimitMap.set(ip, now);
+    next();
+}
+
 async function loadValidKeys() {
     if (!keysCollection) return [];
     const now = Date.now();
@@ -56,9 +76,10 @@ function generateKey() {
     return "KEY-" + Math.random().toString(36).substring(2, 10).toUpperCase();
 }
 
-// ================= KEY SYSTEM =================
-app.post("/check-key", async (req, res) => {
+// ================= KEY SYSTEM (CÓ IP-LOCK) =================
+app.post("/check-key", antiSpam, async (req, res) => {
     const { key, hwid, game, timestamp, signature } = req.body;
+    const clientIp = getClientIp(req);
     
     if (!key || !hwid || !timestamp || !signature) {
         return res.json({ success: false, message: "Yêu cầu không hợp lệ (Thiếu chữ ký bảo mật)" });
@@ -75,7 +96,7 @@ app.post("/check-key", async (req, res) => {
         .digest("hex");
 
     if (signature !== expectedSignature) {
-        return res.json({ success: false, message: "Phát hiện gian lận HWID!" });
+        return res.json({ success: false, message: "Phát hiện gian lận HWID qua Postman!" });
     }
 
     if (!keysCollection) return res.json({ success: false, message: "Chưa kết nối DB" });
@@ -86,7 +107,6 @@ app.post("/check-key", async (req, res) => {
         return res.json({ success: false, message: "Key không tồn tại hoặc hết hạn" });
     }
     
-    // UPDATE: Cho phép key có game là 'all' vượt qua kiểm tra game cụ thể
     if (found.game && game && found.game !== game && found.game !== 'all') {
         return res.json({ success: false, message: `Key này không dùng được cho game ${game.toUpperCase()}` });
     }
@@ -99,7 +119,8 @@ app.post("/check-key", async (req, res) => {
             found.hwids.push(hwid);
             await keysCollection.updateOne({ key: key }, { $set: { hwids: found.hwids } });
         }
-        const token = jwt.sign({ key: key, hwid: hwid, game: found.game }, JWT_SECRET, { expiresIn: '12h' });
+        // Khóa IP người dùng vào Token để chống share
+        const token = jwt.sign({ key: key, hwid: hwid, game: found.game, ip: clientIp }, JWT_SECRET, { expiresIn: '12h' });
         return res.json({ success: true, token: token });
     } else {
         return res.json({ success: false, message: `Key đã đạt tối đa ${maxDev} thiết bị` });
@@ -138,7 +159,6 @@ app.get("/keys", async (req, res) => {
 
 // ================= ẨN TOÀN BỘ LOGIC GAME VÀO SERVER =================
 
-// UPDATE: Thêm cổng BETVIP
 const API_URLS = {
     lc79: {
         normal: "https://wtx.tele68.com/v1/tx/sessions?cp=R&cl=R&pf=web&at=4479e6332082ebf7f206ae3cfcd3ff5e",
@@ -249,16 +269,22 @@ function duDoanFull(chuoi){
     return { ket_qua, ptTai, ptXiu, cau_bip: phatHienCauBip(chuoi) };
 }
 
-app.post("/predict", async (req, res) => {
+app.post("/predict", antiSpam, async (req, res) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
     if (!token) return res.json({ success: false, message: "Từ chối truy cập!" });
 
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
+        const currentIp = getClientIp(req);
+
+        // Kiểm tra IP-Lock: Nếu IP hiện tại khác với IP lúc tạo Token => Chặn Share
+        if (decoded.ip && decoded.ip !== currentIp) {
+            return res.json({ success: false, message: "❌ Phát hiện dùng chung Token qua mạng khác! Vui lòng đăng nhập lại." });
+        }
+
         const { source, seqLength, invertChain, game: clientGame } = req.body;
         
-        // UPDATE: Hỗ trợ key ALL
         let gameToFetch = decoded.game || 'lc79';
         if (gameToFetch === 'all') {
             gameToFetch = clientGame || 'lc79';
@@ -269,7 +295,6 @@ app.post("/predict", async (req, res) => {
         }
 
         const apiUrl = API_URLS[gameToFetch][source || 'normal'];
-        
         const timestamp = new Date().getTime();
         const fetchUrl = apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'nocache=' + timestamp;
         
