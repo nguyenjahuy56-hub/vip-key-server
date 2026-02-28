@@ -13,7 +13,7 @@ const MONGO_URI = process.env.MONGO_URI;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD; 
 const ADMIN_ROUTE = process.env.ADMIN_ROUTE || "/vip-9xk2-admin";
 
-// ĐÃ THÊM API KEY GEMINI CỦA BẠN VÀO ĐÂY
+// API KEY GEMINI BẠN CẤP
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyDELIGX-4iyh7zAeL1J96AAv_4Pp9VFVVA"; 
 const JWT_SECRET = process.env.JWT_SECRET || "chuoi_ky_tu_bi_mat_chi_minh_ban_biet_123456!";
 
@@ -111,14 +111,14 @@ app.get("/keys", async (req, res) => { res.json(await loadValidKeys()); });
 const API_URLS = {
     lc79: { normal: "https://wtx.tele68.com/v1/tx/sessions?cp=R&cl=R&pf=web&at=4479e6332082ebf7f206ae3cfcd3ff5e", md5: "https://wtxmd52.tele68.com/v1/txmd5/sessions?cp=R&cl=R&pf=web&at=93b3e543d609af0351163f3ff9a2c495" },
     xd88: { normal: "https://taixiu.system32-cloudfare-356783752985678522.monster/api/luckydice/GetSoiCau", md5: "https://taixiumd5.system32-cloudfare-356783752985678522.monster/api/md5luckydice/GetSoiCau" },
-    // Đã cập nhật đúng API Sunwin Sicbo bạn đưa
     sunwin_sicbo: { normal: "https://api.wsktnus8.net/v2/history/getLastResult?gameId=ktrng_3979&size=100&tableId=39791215743193&curPage=1", md5: "https://api.wsktnus8.net/v2/history/getLastResult?gameId=ktrng_3979&size=100&tableId=39791215743193&curPage=1" }
 };
 
-// Cập nhật hàm bóc tách dữ liệu để tương thích thêm với form của Sunwin API
+// CẬP NHẬT: Đã bóc tách chuẩn data.resultList của Sunwin
 function extractListFromApiResponse(data) {
     if (!data) return [];
-    if (data.data && Array.isArray(data.data.results)) return data.data.results; // Dành cho form API Sunwin thường gặp
+    if (data.data && Array.isArray(data.data.resultList)) return data.data.resultList; // Form chuẩn Sunwin
+    if (data.data && Array.isArray(data.data.results)) return data.data.results; 
     if (data.results && Array.isArray(data.results)) return data.results;
     if (Array.isArray(data.list)) return data.list;
     if (Array.isArray(data.data)) return data.data;
@@ -128,9 +128,12 @@ function extractListFromApiResponse(data) {
     if (data.data && Array.isArray(data.data.list)) return data.data.list;
     return [];
 }
+
+// CẬP NHẬT: Đã bóc tách chuẩn 3 hột xúc xắc facesList của Sunwin
 function extractDicesFromItem(item) {
     if (!item) return null;
-    if ('dice1' in item && 'dice2' in item && 'dice3' in item) return [Number(item.dice1), Number(item.dice2), Number(item.dice3)]; // Form Sunwin
+    if (Array.isArray(item.facesList) && item.facesList.length === 3) return item.facesList; // Form chuẩn Sunwin
+    if ('dice1' in item && 'dice2' in item && 'dice3' in item) return [Number(item.dice1), Number(item.dice2), Number(item.dice3)]; 
     if ('FirstDice' in item && 'SecondDice' in item && 'ThirdDice' in item) return [Number(item.FirstDice), Number(item.SecondDice), Number(item.ThirdDice)];
     const keys = ['dices','dice','xuc_xac','xucsac','diceValue','dice_values','d'];
     for (const k of keys) {
@@ -143,6 +146,7 @@ function extractDicesFromItem(item) {
     if (item.detail && Array.isArray(item.detail.dices)) return item.detail.dices;
     return null;
 }
+
 function extractResultFromItem(item) {
     if (!item) return null;
     // Sicbo Bão (3 hột giống nhau)
@@ -189,11 +193,10 @@ function duDoanFull(chuoi){
 async function duDoanBangAI(chuoi) {
     try {
         const chuoiString = chuoi.join(" - ");
-        // Prompt đã được nâng cấp để AI trả về TÀI / XỈU / BÃO
         const promptText = `Tôi đang chơi Sicbo. Kết quả ${chuoi.length} ván gần nhất là (T=Tài, X=Xỉu, B=Bão): ${chuoiString}. 
         Hãy đóng vai siêu AI soi cầu, phân tích quy luật. Tay tiếp theo tỷ lệ ra Tài, Xỉu hay Bão là cao nhất?
         Chỉ trả về định dạng JSON, tuyệt đối không giải thích thêm:
-        {"ket_qua": "Tài" hoặc "Xỉu" hoặc "Bão", "ptTai": số %, "ptXiu": số %, "ptBao": số %, "cau_bip": "1 câu khuyên ngắn"}`;
+        {"ket_qua": "Tài" hoặc "Xỉu" hoặc "Bão", "ptTai": số %, "ptXiu": số %, "ptBao": số %, "cau_bip": "1 câu khuyên ngắn gọn"}`;
 
         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
         
@@ -234,6 +237,7 @@ app.post("/predict", async (req, res) => {
 
         if (!list || list.length === 0) return res.json({success: false, message: "Không lấy được cầu từ Game."});
 
+        // Chỉ cắt đủ số lượng ván (10-15) mà người dùng gửi lên từ Frontend
         let maxItems = Math.min(seqLength || 13, list.length);
         let ketQuaTuApi = [];
         
@@ -251,6 +255,7 @@ app.post("/predict", async (req, res) => {
 
         let chuoiN = ketQuaTuApi.reverse(); 
         let chainForAnalysis = chuoiN.slice();
+        
         if(invertChain) {
             chainForAnalysis = chainForAnalysis.map(c => c === 'T' ? 'X' : (c === 'X' ? 'T' : c));
         }
@@ -260,6 +265,7 @@ app.post("/predict", async (req, res) => {
 
         let result;
         if (game === 'sunwin_sicbo') {
+            // Ném đúng chuỗi 10-15 ván vào AI
             result = await duDoanBangAI(chainForAnalysis);
         } else {
             result = duDoanFull(chainForAnalysis);
