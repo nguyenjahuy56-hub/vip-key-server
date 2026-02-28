@@ -13,7 +13,6 @@ const MONGO_URI = process.env.MONGO_URI;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD; 
 const ADMIN_ROUTE = process.env.ADMIN_ROUTE || "/vip-9xk2-admin";
 
-// API KEY GEMINI BẠN CẤP
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyDELIGX-4iyh7zAeL1J96AAv_4Pp9VFVVA"; 
 const JWT_SECRET = process.env.JWT_SECRET || "chuoi_ky_tu_bi_mat_chi_minh_ban_biet_123456!";
 
@@ -107,17 +106,57 @@ app.post("/reset-hwid", async (req, res) => {
 
 app.get("/keys", async (req, res) => { res.json(await loadValidKeys()); });
 
-// ================= API GAME & LOGIC =================
+// ================= API GAME & THUẬT TOÁN VƯỢT RÀO =================
 const API_URLS = {
     lc79: { normal: "https://wtx.tele68.com/v1/tx/sessions?cp=R&cl=R&pf=web&at=4479e6332082ebf7f206ae3cfcd3ff5e", md5: "https://wtxmd52.tele68.com/v1/txmd5/sessions?cp=R&cl=R&pf=web&at=93b3e543d609af0351163f3ff9a2c495" },
     xd88: { normal: "https://taixiu.system32-cloudfare-356783752985678522.monster/api/luckydice/GetSoiCau", md5: "https://taixiumd5.system32-cloudfare-356783752985678522.monster/api/md5luckydice/GetSoiCau" },
     sunwin_sicbo: { normal: "https://api.wsktnus8.net/v2/history/getLastResult?gameId=ktrng_3979&size=100&tableId=39791215743193&curPage=1", md5: "https://api.wsktnus8.net/v2/history/getLastResult?gameId=ktrng_3979&size=100&tableId=39791215743193&curPage=1" }
 };
 
-// CẬP NHẬT: Đã bóc tách chuẩn data.resultList của Sunwin
+// THUẬT TOÁN ĐÓNG GIẢ TRÌNH DUYỆT ĐỂ CHỐNG ANTI-BOT
+async function fetchGameData(url) {
+    const headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://web.sunwin.lt",
+        "Referer": "https://web.sunwin.lt/"
+    };
+    
+    // Cách 1: Thử xin thẳng với thẻ tùy viên (Headers)
+    try {
+        let res = await fetch(url, { headers });
+        let text = await res.text();
+        try { 
+            let json = JSON.parse(text); 
+            if(json.data || json.resultList || json.results || json.list || Array.isArray(json)) return json;
+        } catch(e){}
+    } catch(e) {}
+
+    // Cách 2: Vượt rào bằng Proxy AllOrigins
+    try {
+        let p1 = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}&disableCache=true`;
+        let res1 = await fetch(p1);
+        let json1 = await res1.json();
+        if (json1 && json1.contents) {
+            let d1 = JSON.parse(json1.contents);
+            if(d1.data || d1.resultList || d1.results || d1.list || Array.isArray(d1)) return d1;
+        }
+    } catch(e) {}
+
+    // Cách 3: Vượt rào bằng Proxy CodeTabs
+    try {
+        let p2 = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`;
+        let res2 = await fetch(p2);
+        let d2 = await res2.json();
+        if(d2.data || d2.resultList || d2.results || d2.list || Array.isArray(d2)) return d2;
+    } catch(e) {}
+
+    return null;
+}
+
 function extractListFromApiResponse(data) {
     if (!data) return [];
-    if (data.data && Array.isArray(data.data.resultList)) return data.data.resultList; // Form chuẩn Sunwin
+    if (data.data && Array.isArray(data.data.resultList)) return data.data.resultList; // Form Sunwin
     if (data.data && Array.isArray(data.data.results)) return data.data.results; 
     if (data.results && Array.isArray(data.results)) return data.results;
     if (Array.isArray(data.list)) return data.list;
@@ -129,10 +168,9 @@ function extractListFromApiResponse(data) {
     return [];
 }
 
-// CẬP NHẬT: Đã bóc tách chuẩn 3 hột xúc xắc facesList của Sunwin
 function extractDicesFromItem(item) {
     if (!item) return null;
-    if (Array.isArray(item.facesList) && item.facesList.length === 3) return item.facesList; // Form chuẩn Sunwin
+    if (Array.isArray(item.facesList) && item.facesList.length === 3) return item.facesList; // Form Sunwin
     if ('dice1' in item && 'dice2' in item && 'dice3' in item) return [Number(item.dice1), Number(item.dice2), Number(item.dice3)]; 
     if ('FirstDice' in item && 'SecondDice' in item && 'ThirdDice' in item) return [Number(item.FirstDice), Number(item.SecondDice), Number(item.ThirdDice)];
     const keys = ['dices','dice','xuc_xac','xucsac','diceValue','dice_values','d'];
@@ -149,7 +187,6 @@ function extractDicesFromItem(item) {
 
 function extractResultFromItem(item) {
     if (!item) return null;
-    // Sicbo Bão (3 hột giống nhau)
     const dices = extractDicesFromItem(item);
     if (Array.isArray(dices) && dices.length === 3) {
         if (dices[0] === dices[1] && dices[1] === dices[2]) return 'B'; // BÃO
@@ -169,7 +206,7 @@ function extractResultFromItem(item) {
     return null;
 }
 
-// === LOGIC CŨ CHO LC79 & XÓC ĐĨA (GIỮ NGUYÊN) ===
+// === LOGIC CŨ CHO LC79 & XÓC ĐĨA ===
 function phanTichChuoiWeighted(chuoi){ const n = chuoi.length; if (n === 0) return { ptTai: 50, ptXiu: 50 }; const weights = Array.from({length: n}, (_, i) => i + 1); const rev = [...chuoi].reverse(); let tai = 0, xiu = 0; for(let i = 0; i < rev.length; i++){ const weight = weights[n - 1 - i]; if(rev[i] === "T") tai += weight; if(rev[i] === "X") xiu += weight; } const total = weights.reduce((a, b) => a + b, 0); return { ptTai: +(tai / total * 100).toFixed(1), ptXiu: +(xiu / total * 100).toFixed(1) }; }
 function demChuoiLienTiep(chuoi, ky_tu){ let count=0; for(let i=chuoi.length-1;i>=0;i--) { if(chuoi[i]===ky_tu) count++; else break; } return count; }
 function laCauDanXen(chuoi){ if(chuoi.length<6) return false; for(let i=chuoi.length-6;i<chuoi.length-1;i++) if(chuoi[i]===chuoi[i+1]) return false; return true; }
@@ -189,7 +226,7 @@ function duDoanFull(chuoi){
     return { ket_qua, ptTai, ptXiu, cau_bip: phatHienCauBip(chuoi) };
 }
 
-// === HÀM GỌI GEMINI AI RIÊNG CHO SUNWIN ===
+// === HÀM GỌI GEMINI AI CHO SUNWIN ===
 async function duDoanBangAI(chuoi) {
     try {
         const chuoiString = chuoi.join(" - ");
@@ -214,7 +251,7 @@ async function duDoanBangAI(chuoi) {
         return finalResult;
     } catch (e) {
         console.error("Lỗi AI Gemini:", e);
-        return { ket_qua: "Không rõ", ptTai: 45, ptXiu: 45, ptBao: 10, cau_bip: "⚠️ AI đang kết nối lại, đánh nhỏ tay này!" };
+        return { ket_qua: "Không rõ", ptTai: 45, ptXiu: 45, ptBao: 10, cau_bip: "⚠️ AI đang xử lý dữ liệu..." };
     }
 }
 
@@ -229,15 +266,25 @@ app.post("/predict", async (req, res) => {
         
         const game = decoded.game || 'lc79';
         const apiUrl = API_URLS[game][source || 'normal'];
-        
         const timestamp = new Date().getTime();
-        const response = await fetch(apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'nocache=' + timestamp);
-        const data = await response.json();
+        const fetchUrl = apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'nocache=' + timestamp;
+        
+        // Gọi hàm vượt rào để lấy Data
+        const data = await fetchGameData(fetchUrl);
+        
+        if (!data) {
+            return res.json({success: false, message: "⚠️ Sunwin đang chặn kết nối (Anti-Bot). Vui lòng thử lại!"});
+        }
+
         const list = extractListFromApiResponse(data);
 
-        if (!list || list.length === 0) return res.json({success: false, message: "Không lấy được cầu từ Game."});
+        if (!list || list.length === 0) {
+            // Hiển thị một mẩu data lỗi để dễ chuẩn đoán nếu vẫn hỏng
+            let debugData = JSON.stringify(data).substring(0, 40);
+            return res.json({success: false, message: "Lỗi định dạng trả về. Debug: " + debugData});
+        }
 
-        // Chỉ cắt đủ số lượng ván (10-15) mà người dùng gửi lên từ Frontend
+        // Lấy đúng số lượng ván gửi từ Frontend (10-15 ván)
         let maxItems = Math.min(seqLength || 13, list.length);
         let ketQuaTuApi = [];
         
@@ -265,8 +312,7 @@ app.post("/predict", async (req, res) => {
 
         let result;
         if (game === 'sunwin_sicbo') {
-            // Ném đúng chuỗi 10-15 ván vào AI
-            result = await duDoanBangAI(chainForAnalysis);
+            result = await duDoanBangAI(chainForAnalysis); // AI chỉ nhận 10-15 ván
         } else {
             result = duDoanFull(chainForAnalysis);
         }
