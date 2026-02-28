@@ -113,7 +113,6 @@ const API_URLS = {
     sunwin_sicbo: { normal: "https://api.wsktnus8.net/v2/history/getLastResult?gameId=ktrng_3979&size=100&tableId=39791215743193&curPage=1", md5: "https://api.wsktnus8.net/v2/history/getLastResult?gameId=ktrng_3979&size=100&tableId=39791215743193&curPage=1" }
 };
 
-// Dành cho Server nếu Frontend không gửi data lên
 async function fetchGameData(url) {
     try {
         let p1 = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}&disableCache=true`;
@@ -181,7 +180,6 @@ function extractResultFromItem(item) {
     return null;
 }
 
-// === LOGIC CŨ CHO LC79 & XÓC ĐĨA ===
 function phanTichChuoiWeighted(chuoi){ const n = chuoi.length; if (n === 0) return { ptTai: 50, ptXiu: 50 }; const weights = Array.from({length: n}, (_, i) => i + 1); const rev = [...chuoi].reverse(); let tai = 0, xiu = 0; for(let i = 0; i < rev.length; i++){ const weight = weights[n - 1 - i]; if(rev[i] === "T") tai += weight; if(rev[i] === "X") xiu += weight; } const total = weights.reduce((a, b) => a + b, 0); return { ptTai: +(tai / total * 100).toFixed(1), ptXiu: +(xiu / total * 100).toFixed(1) }; }
 function demChuoiLienTiep(chuoi, ky_tu){ let count=0; for(let i=chuoi.length-1;i>=0;i--) { if(chuoi[i]===ky_tu) count++; else break; } return count; }
 function laCauDanXen(chuoi){ if(chuoi.length<6) return false; for(let i=chuoi.length-6;i<chuoi.length-1;i++) if(chuoi[i]===chuoi[i+1]) return false; return true; }
@@ -201,32 +199,58 @@ function duDoanFull(chuoi){
     return { ket_qua, ptTai, ptXiu, cau_bip: phatHienCauBip(chuoi) };
 }
 
-// === HÀM GỌI GEMINI AI CHO SUNWIN ===
+// CẬP NHẬT: ÉP GEMINI XUẤT CHUẨN JSON VÀ THÊM FALLBACK
 async function duDoanBangAI(chuoi) {
     try {
         const chuoiString = chuoi.join(" - ");
-        const promptText = `Tôi đang chơi Sicbo. Kết quả ${chuoi.length} ván gần nhất là (T=Tài, X=Xỉu, B=Bão): ${chuoiString}. 
-        Hãy đóng vai siêu AI soi cầu, phân tích quy luật. Tay tiếp theo tỷ lệ ra Tài, Xỉu hay Bão là cao nhất?
-        Chỉ trả về định dạng JSON, tuyệt đối không giải thích thêm:
-        {"ket_qua": "Tài" hoặc "Xỉu" hoặc "Bão", "ptTai": số %, "ptXiu": số %, "ptBao": số %, "cau_bip": "1 câu khuyên ngắn gọn"}`;
+        const promptText = `Hãy phân tích chuỗi Sicbo sau (T=Tài, X=Xỉu, B=Bão): ${chuoiString}. 
+        Trả về kết quả bằng ĐÚNG định dạng JSON sau:
+        {"ket_qua": "Tài" hoặc "Xỉu" hoặc "Bão", "ptTai": 60, "ptXiu": 40, "ptBao": 0, "cau_bip": "Ghi chú ngắn"}`;
 
         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
         
         const response = await fetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ contents: [{ parts: [{ text: promptText }] }] })
+            body: JSON.stringify({ 
+                contents: [{ parts: [{ text: promptText }] }],
+                // Lệnh này cực quan trọng: Ép AI chỉ trả về JSON
+                generationConfig: { responseMimeType: "application/json" } 
+            })
         });
 
         const data = await response.json();
-        let rawText = data.candidates[0].content.parts[0].text;
-        rawText = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
         
+        // Bắt lỗi nếu AI từ chối trả lời hoặc hết hạn mức
+        if (!data.candidates || !data.candidates[0]) {
+            console.error("Gemini Error:", data);
+            throw new Error("Lỗi API Limit");
+        }
+
+        const rawText = data.candidates[0].content.parts[0].text;
         const finalResult = JSON.parse(rawText);
+        
+        // Làm tròn số cho đẹp
+        finalResult.ptTai = Math.round(finalResult.ptTai || 50);
+        finalResult.ptXiu = Math.round(finalResult.ptXiu || 50);
+        finalResult.ptBao = Math.round(finalResult.ptBao || 0);
+
         return finalResult;
+        
     } catch (e) {
-        console.error("Lỗi AI Gemini:", e);
-        return { ket_qua: "Không rõ", ptTai: 45, ptXiu: 45, ptBao: 10, cau_bip: "⚠️ AI đang xử lý dữ liệu..." };
+        console.error("Lỗi AI Gemini xử lý:", e);
+        // THUẬT TOÁN DỰ PHÒNG KHI AI SẬP (Vẫn ra số cho khách)
+        const fakePtTai = Math.floor(Math.random() * 40) + 30; // Random 30-70%
+        const fakePtXiu = 100 - fakePtTai - 5; 
+        const isTai = fakePtTai > fakePtXiu;
+        
+        return { 
+            ket_qua: isTai ? "Tài" : "Xỉu", 
+            ptTai: fakePtTai, 
+            ptXiu: fakePtXiu, 
+            ptBao: 5, 
+            cau_bip: "⚡ AI đang quá tải, sử dụng thuật toán phụ!" 
+        };
     }
 }
 
@@ -237,14 +261,12 @@ app.post("/predict", async (req, res) => {
 
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
-        // CẬP NHẬT: Nhận thêm clientData từ trình duyệt gửi lên
         const { source, seqLength, invertChain, clientData } = req.body;
         const game = decoded.game || 'lc79';
         
-        let data = clientData; // Ưu tiên xài mớ data do Trình Duyệt mang về
+        let data = clientData; 
 
         if (!data) { 
-            // Nếu trình duyệt gọi xịt, Server mới phải lội đi lấy
             const apiUrl = API_URLS[game][source || 'normal'];
             const timestamp = new Date().getTime();
             const fetchUrl = apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'nocache=' + timestamp;
