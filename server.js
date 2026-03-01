@@ -172,7 +172,6 @@ app.post("/admin-keys", verifyAdmin, async (req, res) => {
 
 // ================= ẨN TOÀN BỘ LOGIC GAME VÀO SERVER =================
 
-// UPDATE: Đã thêm cổng Sunwin
 const API_URLS = {
     lc79: {
         normal: "https://wtx.tele68.com/v1/tx/sessions?cp=R&cl=R&pf=web&at=4479e6332082ebf7f206ae3cfcd3ff5e",
@@ -188,7 +187,7 @@ const API_URLS = {
     },
     sunwin: {
         normal: "https://apisuntcbm.onrender.com/sunlon",
-        md5: "https://apisuntcbm.onrender.com/sunlon" // Sunwin chỉ có bàn thường
+        md5: "https://apisuntcbm.onrender.com/sunlon" 
     }
 };
 
@@ -237,6 +236,60 @@ function extractResultFromItem(item) {
     return null;
 }
 
+// ================= THUẬT TOÁN NHẬN DIỆN MẪU CẦU MỚI =================
+function nhanDienMauCau(chuoi) {
+    const str = chuoi.join("");
+    const len = str.length;
+    if (len < 4) return null;
+
+    const tail4 = str.slice(-4);
+    const tail5 = str.slice(-5);
+    const tail6 = str.slice(-6);
+
+    // 1. Cầu 1-1 (Ping Pong)
+    if (tail6 === "TXTXTX" || tail6 === "XTXTXT") return { ten: "Cầu 1-1 dài", du_doan: str[len-1] === "T" ? "X" : "T", diem: 5 };
+    if (tail5 === "TXTXT" || tail5 === "XTXTX") return { ten: "Cầu 1-1", du_doan: str[len-1] === "T" ? "X" : "T", diem: 4 };
+
+    // 2. Cầu 2-2
+    if (tail6 === "TTXXTT") return { ten: "Cầu 2-2", du_doan: "X", diem: 4.5 };
+    if (tail6 === "XXTTXX") return { ten: "Cầu 2-2", du_doan: "T", diem: 4.5 };
+    if (tail5 === "TTXXT") return { ten: "Cầu 2-2", du_doan: "T", diem: 4 };
+    if (tail5 === "XXTTX") return { ten: "Cầu 2-2", du_doan: "X", diem: 4 };
+    if (tail4 === "TTXX") return { ten: "Cầu 2-2", du_doan: "T", diem: 3 };
+    if (tail4 === "XXTT") return { ten: "Cầu 2-2", du_doan: "X", diem: 3 };
+
+    // 3. Cầu 3-3
+    if (tail6 === "TTTXXX") return { ten: "Cầu 3-3", du_doan: "T", diem: 4 };
+    if (tail6 === "XXXTTT") return { ten: "Cầu 3-3", du_doan: "X", diem: 4 };
+
+    // 4. Cầu 1-2-1
+    if (tail5 === "TTXTT") return { ten: "Cầu 1-2-1 gãy", du_doan: "X", diem: 3 };
+    if (tail5 === "XXTXX") return { ten: "Cầu 1-2-1 gãy", du_doan: "T", diem: 3 };
+    if (tail4 === "TXXT") return { ten: "Cầu 1-2-1", du_doan: "X", diem: 3.5 };
+    if (tail4 === "XTTX") return { ten: "Cầu 1-2-1", du_doan: "T", diem: 3.5 };
+
+    // 5. Cầu Tiến Lên 1-2-3 / Lùi 3-2-1
+    if (tail6 === "TXXTTT" || tail5 === "XXTTT") return { ten: "Cầu tiến lên", du_doan: "X", diem: 4 };
+    if (tail6 === "XTTXXX" || tail5 === "TTXXX") return { ten: "Cầu tiến lên", du_doan: "T", diem: 4 };
+    if (tail6 === "TTTXXT") return { ten: "Cầu lùi 3-2-1", du_doan: "X", diem: 4 };
+    if (tail6 === "XXXTTX") return { ten: "Cầu lùi 3-2-1", du_doan: "T", diem: 4 };
+
+    // 6. Cầu 1-3-1
+    if (tail5 === "TXXXT") return { ten: "Cầu 1-3-1", du_doan: "X", diem: 3 };
+    if (tail5 === "XTTTX") return { ten: "Cầu 1-3-1", du_doan: "T", diem: 3 };
+
+    return null;
+}
+
+function phatHienCauBip(chuoi){
+    const str = chuoi.join("");
+    if(str.endsWith("TTTTTT") || str.endsWith("XXXXXX")) return "Cầu bệt dài bất thường";
+    if(str.endsWith("TXTXX") || str.endsWith("XTXTT")) return "Cầu nhử đảo 1-1-2";
+    if(str.endsWith("TTTTX") || str.endsWith("XXXXT")) return "Cầu vừa bẻ bệt";
+    if(str.endsWith("TXXXXX") || str.endsWith("XTTTTT")) return "Bệt bám đuôi";
+    return null;
+}
+
 function phanTichChuoiWeighted(chuoi){
     const n = chuoi.length;
     if (n === 0) return { ptTai: 50, ptXiu: 50 };
@@ -251,39 +304,56 @@ function phanTichChuoiWeighted(chuoi){
     const total = weights.reduce((a, b) => a + b, 0);
     return { ptTai: +(tai / total * 100).toFixed(1), ptXiu: +(xiu / total * 100).toFixed(1) };
 }
+
 function demChuoiLienTiep(chuoi, ky_tu){
     let count=0; for(let i=chuoi.length-1;i>=0;i--) { if(chuoi[i]===ky_tu) count++; else break; } return count;
 }
+
 function laCauDanXen(chuoi){
     if(chuoi.length<6) return false;
     for(let i=chuoi.length-6;i<chuoi.length-1;i++) if(chuoi[i]===chuoi[i+1]) return false;
     return true;
 }
+
 function phanTichChuKy(chuoi){
     for(const l of [5,4,3,2]){
         if(chuoi.length>=2*l && chuoi.slice(-l).join("")===chuoi.slice(-2*l,-l).join("")) return chuoi[chuoi.length-1];
     } return null;
 }
-function phatHienCauBip(chuoi){
-    const tail6=chuoi.slice(-6).join("");
-    if(tail6==="TTTTTT"||tail6==="XXXXXX") return "Cầu bệt dài bất thường";
-    const tail5 = chuoi.slice(-5).join("");
-    if (tail5 === "TXTXX" || tail5 === "XTXTT") return "Cầu nhử đảo 1-1-2";
-    return null;
-}
+
 function duDoanFull(chuoi){
     const {ptTai, ptXiu} = phanTichChuoiWeighted(chuoi);
     let diem_tai = 0, diem_xiu = 0;
+    
+    // 1. Phân tích chu kỳ lặp lại cơ bản
     const ck = phanTichChuKy(chuoi);
-    if(ck === "T") diem_tai += 3; if(ck === "X") diem_xiu += 3;
-    if(laCauDanXen(chuoi)) { if(chuoi[chuoi.length-1] === "T") diem_xiu += 3; else diem_tai += 3; }
+    if(ck === "T") diem_tai += 2.5; 
+    if(ck === "X") diem_xiu += 2.5;
+
+    // 2. Nhận diện mẫu cầu chuyên sâu (MỚI)
+    const mauCau = nhanDienMauCau(chuoi);
+    if (mauCau) {
+        if (mauCau.du_doan === "T") diem_tai += mauCau.diem;
+        if (mauCau.du_doan === "X") diem_xiu += mauCau.diem;
+    } else {
+        // Fallback về cầu đan xen cơ bản nếu không khớp pattern chuyên sâu
+        if(laCauDanXen(chuoi)) { 
+            if(chuoi[chuoi.length-1] === "T") diem_xiu += 3; else diem_tai += 3; 
+        }
+    }
+
+    // 3. Xử lý bệt
     const lt_t = demChuoiLienTiep(chuoi, "T"), lt_x = demChuoiLienTiep(chuoi, "X");
-    if (lt_t >= 3) { if (lt_t <= 5) diem_tai += 3; else if (lt_t >= 7) diem_xiu += 4; }
-    if (lt_x >= 3) { if (lt_x <= 5) diem_xiu += 3; else if (lt_x >= 7) diem_tai += 4; }
-    diem_tai += ptTai / 20; diem_xiu += ptXiu / 20;
+    if (lt_t >= 3) { if (lt_t <= 5) diem_tai += 3.5; else if (lt_t >= 7) diem_xiu += 4.5; }
+    if (lt_x >= 3) { if (lt_x <= 5) diem_xiu += 3.5; else if (lt_x >= 7) diem_tai += 4.5; }
+    
+    // 4. Áp dụng trọng số tổng thể
+    diem_tai += ptTai / 20; 
+    diem_xiu += ptXiu / 20;
     
     let ket_qua = "Không rõ";
     if (Math.abs(diem_tai - diem_xiu) > 0.5) ket_qua = diem_tai > diem_xiu ? "Tài" : "Xỉu";
+    
     return { ket_qua, ptTai, ptXiu, cau_bip: phatHienCauBip(chuoi) };
 }
 
@@ -297,12 +367,10 @@ app.post("/predict", antiSpam, async (req, res) => {
         const decoded = jwt.verify(token, JWT_SECRET);
         const currentIp = getClientIp(req);
 
-        // IP-Lock
         if (decoded.ip && decoded.ip !== currentIp) {
             return res.json({ success: false, message: "❌ Phát hiện dùng chung Token qua mạng khác! Vui lòng đăng nhập lại.", kicked: true });
         }
 
-        // ================= CƠ CHẾ KICK OUT =================
         if (keysCollection) {
             const dbKey = await keysCollection.findOne({ key: decoded.key });
             if (!dbKey) {
@@ -312,7 +380,6 @@ app.post("/predict", antiSpam, async (req, res) => {
                 return res.json({ success: false, message: "❌ Key của bạn đã HẾT HẠN!", kicked: true });
             }
         }
-        // ===================================================
 
         const { source, seqLength, invertChain, game: clientGame } = req.body;
         
@@ -335,25 +402,19 @@ app.post("/predict", antiSpam, async (req, res) => {
         let chuoiN = [];
         let lastDice = [];
 
-        // LÔ GIC PHÂN LUỒNG XỬ LÝ DATA THEO TỪNG GAME
         if (gameToFetch === 'sunwin') {
-            // Xử lý riêng cho form API của Sunwin
             if (!data || !data.pattern) return res.json({success: false, message: "Không lấy được cầu từ Sunwin."});
             
-            // Lấy xúc xắc
             if (data.xuc_xac_1 && data.xuc_xac_2 && data.xuc_xac_3) {
                 lastDice = [Number(data.xuc_xac_1), Number(data.xuc_xac_2), Number(data.xuc_xac_3)];
             }
             
-            // Cắt đúng số lượng cầu người chơi chọn từ đuôi chuỗi pattern
             let p = data.pattern.toUpperCase();
             let selectedItems = p.slice(-(seqLength || 13)).split(''); 
             
-            // Chuyển mảng thành dạng chuẩn
             chuoiN = selectedItems.map(c => c === 'T' ? 'T' : 'X');
 
         } else {
-            // Xử lý chung cho LC79, XD88, BetVIP
             const list = extractListFromApiResponse(data);
             if (!list || list.length === 0) return res.json({success: false, message: "Không lấy được cầu từ Game."});
 
@@ -377,7 +438,6 @@ app.post("/predict", antiSpam, async (req, res) => {
             lastDice = extractDicesFromItem(firstItem) || [];
         }
 
-        // CHẠY DỰ ĐOÁN TỔNG HỢP
         let chainForAnalysis = chuoiN.slice();
         
         if(invertChain) {
