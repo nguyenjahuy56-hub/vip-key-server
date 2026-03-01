@@ -15,8 +15,8 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const ADMIN_ROUTE = process.env.ADMIN_ROUTE || "/vip-9xk2-admin";
 const JWT_SECRET = process.env.JWT_SECRET || "chuoi_ky_tu_bi_mat_chi_minh_ban_biet_123456!";
 
-// KEY BẢO MẬT ĐỂ CHỐNG FAKE HWID (Bạn phải dùng key này trong code Tool của bạn luôn)
-const HWID_SECRET = "MY_SUPER_SECRET_HWID_KEY_2026"; 
+// KEY BẢO MẬT ĐỂ CHỐNG FAKE HWID (Lấy từ Render)
+const HWID_SECRET = process.env.HWID_SECRET || "MY_SUPER_SECRET_HWID_KEY_2026";
 
 if (!MONGO_URI || !ADMIN_PASSWORD) console.error("❌ THIẾU MONGO_URI HOẶC MẬT KHẨU TRÊN RENDER!");
 
@@ -426,3 +426,4 @@ async function resetKey(key){
 app.listen(PORT, () => {
     console.log("Server chạy tại cổng: " + PORT);
 });
+
