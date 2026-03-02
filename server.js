@@ -260,13 +260,11 @@ function duDoanLogic1(chuoi){
     return { ket_qua, ptTai, ptXiu, cau_bip: phatHienCauBip(chuoi) };
 }
 
-
 // ================= THUẬT TOÁN LOGIC 2 (TỪ FILE OKI.PY) =================
 const CONFIG_OKI = {
     NGUONG_TY_LE: 3, DIEM_MAU_CAU: 4.0, DIEM_CHU_KY: 3.0, 
     DIEM_CAU_BET: 2.0, DIEM_CAU_1_1: 4.0, HE_SO_PERCENT: 8.0, HE_SO_LICH_SU: 0.8
 };
-
 const mau_cau_oki = {
     "TTXXT": "T", "XXTTX": "X", "TXXTX": "T", "XTTXT": "X", "TXT": "X", "XTX": "T", "TTX": "X", "XXT": "T",
     "TXTXTX": "X", "XTXTXT": "T", "TXTXT": "X", "XTXTT": "T", "TTTXX": "T", "XXXT": "X", "TXXXT": "T", "XTTTX": "X",
@@ -274,7 +272,6 @@ const mau_cau_oki = {
     "TTTTTTT": "T", "XXXXXXX": "X", "TXTXTXTX": "T", "XTXTXTXT": "X", "TTXXTTXX": "T", "XXTTXXTT": "X",
     "TTTXXXTTT": "T", "XXXTTTXXX": "X", "TTTTTX": "T", "XXXXTX": "X", "TTXXTT": "X", "XXTTXX": "T", "TXXTXX": "T", "XTTXTT": "X"
 };
-
 function phan_tich_chuoi_weighted_oki(chuoi) {
     let weights = [];
     for (let i = 0; i < chuoi.length; i++) weights.push(Math.pow(2, i));
@@ -288,7 +285,6 @@ function phan_tich_chuoi_weighted_oki(chuoi) {
     if (tong_weight === 0) return { ptTai: 50.0, ptXiu: 50.0 };
     return { ptTai: parseFloat((tai / tong_weight * 100).toFixed(1)), ptXiu: parseFloat((xiu / tong_weight * 100).toFixed(1)) };
 }
-
 function phat_hien_cau_bip_oki(chuoi) {
     const str = chuoi.join("");
     if (str.endsWith("TTTTTT") || str.endsWith("XXXXXX")) return "Cầu bệt dài > 6 (Dễ gãy hoặc bệt tiếp)";
@@ -297,12 +293,9 @@ function phat_hien_cau_bip_oki(chuoi) {
     if (str.endsWith("TXTXTXTX") || str.endsWith("XTXTXTXT")) return "Ping-pong dài (Chuẩn bị gãy cầu 1-1)";
     return null;
 }
-
 function duDoanLogic2(chuoi) {
     let { ptTai, ptXiu } = phan_tich_chuoi_weighted_oki(chuoi);
     let diem_tai = 0, diem_xiu = 0;
-
-    // 1. Phân tích cầu bệt
     for (let l = 7; l > 2; l--) {
         if (chuoi.length >= l) {
             const tailStr = chuoi.slice(-l).join("");
@@ -310,16 +303,13 @@ function duDoanLogic2(chuoi) {
             else if (tailStr === "X".repeat(l)) { diem_xiu += (l - 2) * CONFIG_OKI.DIEM_CAU_BET; break; }
         }
     }
-    // 2. Phân tích chu kỳ
-    const ck = phanTichChuKy(chuoi); // Dùng lại hàm phân tích chu kỳ
+    const ck = phanTichChuKy(chuoi); 
     if (ck === "T") diem_tai += CONFIG_OKI.DIEM_CHU_KY;
     else if (ck === "X") diem_xiu += CONFIG_OKI.DIEM_CHU_KY;
-    // 3. Cầu 1-1
     if (laCauDanXen(chuoi)) {
         if (chuoi[chuoi.length - 1] === "T") diem_xiu += CONFIG_OKI.DIEM_CAU_1_1;
         else diem_tai += CONFIG_OKI.DIEM_CAU_1_1;
     }
-    // 4. Mẫu cầu
     const tail8 = chuoi.slice(-8).join("");
     for (const [k, v] of Object.entries(mau_cau_oki)) {
         if (tail8.endsWith(k)) {
@@ -327,25 +317,66 @@ function duDoanLogic2(chuoi) {
             else diem_xiu += CONFIG_OKI.DIEM_MAU_CAU;
         }
     }
-    // 5. Tỷ lệ xu hướng
     if (ptTai > ptXiu + CONFIG_OKI.NGUONG_TY_LE) diem_tai += 3;
     else if (ptXiu > ptTai + CONFIG_OKI.NGUONG_TY_LE) diem_xiu += 3;
-    // 6. Lịch sử
     const countT = chuoi.filter(c => c === "T").length;
     const countX = chuoi.filter(c => c === "X").length;
     if (countT >= CONFIG_OKI.HE_SO_LICH_SU * chuoi.length) diem_tai += 2;
     else if (countX >= CONFIG_OKI.HE_SO_LICH_SU * chuoi.length) diem_xiu += 2;
-    // 7. Trọng số Percent
     diem_tai += ptTai / CONFIG_OKI.HE_SO_PERCENT;
     diem_xiu += ptXiu / CONFIG_OKI.HE_SO_PERCENT;
 
     let ket_qua = "Không rõ";
     if (diem_tai > diem_xiu + 1.5) ket_qua = "Tài";
     else if (diem_xiu > diem_tai + 1.5) ket_qua = "Xỉu";
-
     return { ket_qua, ptTai, ptXiu, cau_bip: phat_hien_cau_bip_oki(chuoi) };
 }
 
+// ================= THUẬT TOÁN XÚC XẮC (CÔNG THỨC THÀNH SUNWIN) =================
+function duDoanXucXacThanh(dices) {
+    if (!dices || dices.length !== 3) return { ket_qua: "Không rõ", tong: "?" };
+    
+    // Quy tắc nhả: 1->5, 2->4, 3->6, 4->2, 5->1, 6->3
+    const nha_map = {1: 5, 2: 4, 3: 6, 4: 2, 5: 1, 6: 3};
+    
+    // Lấy xúc xắc từ đít (d3) lên đầu (d1)
+    let process_dice = [dices[2], dices[1], dices[0]]; 
+    let new_dice = [];
+    let force_tai = false;
+    let seen_counts = {};
+    let last_mapped = {};
+
+    for (let i = 0; i < 3; i++) {
+        let d = process_dice[i];
+        if (seen_counts[d]) {
+            // Trùng lặp (ví dụ 333) -> trừ đi 1 từ lần nhả của con trước
+            let next_val = last_mapped[d] - 1;
+            if (next_val <= 0) {
+                force_tai = true; // Không nhả được nữa -> Đụng đáy 85% Tài
+                new_dice.push(0);
+            } else {
+                new_dice.push(next_val);
+                last_mapped[d] = next_val;
+            }
+            seen_counts[d]++;
+        } else {
+            let mapped_val = nha_map[d] || 1;
+            new_dice.push(mapped_val);
+            last_mapped[d] = mapped_val;
+            seen_counts[d] = 1;
+        }
+    }
+
+    if (force_tai) {
+        return { ket_qua: "Tài", tong: "Max (85% Tài)" };
+    } else {
+        let predicted_sum = new_dice[0] + new_dice[1] + new_dice[2];
+        return { 
+            ket_qua: (predicted_sum >= 11 && predicted_sum <= 17) ? 'Tài' : 'Xỉu', 
+            tong: predicted_sum 
+        };
+    }
+}
 
 // ================= ENDPOINT CHÍNH =================
 app.post("/predict", antiSpam, async (req, res) => {
@@ -405,16 +436,10 @@ app.post("/predict", antiSpam, async (req, res) => {
         let chainForAnalysis = chuoiN.slice();
         if(invertChain) chainForAnalysis = chainForAnalysis.map(c => c === 'T' ? 'X' : (c === 'X' ? 'T' : c));
 
-        // CHẠY CẢ 2 LOGIC
+        // CHẠY SONG SONG CÁC LOGIC
         const l1 = duDoanLogic1(chainForAnalysis);
         const l2 = duDoanLogic2(chainForAnalysis);
-
-        // LOGIC XÚC XẮC
-        let dice_result = { ket_qua: "Không rõ", tong: "?" };
-        if (lastDice && lastDice.length === 3) {
-            let sum = lastDice[0] + lastDice[1] + lastDice[2];
-            if (!isNaN(sum)) dice_result = { ket_qua: (sum >= 11 && sum <= 17) ? 'Tài' : 'Xỉu', tong: sum };
-        }
+        const dice_result = duDoanXucXacThanh(lastDice);
 
         res.json({ 
             success: true, 
