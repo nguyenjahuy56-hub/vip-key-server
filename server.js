@@ -133,6 +133,7 @@ function extractListFromApiResponse(data) {
     if (Array.isArray(data.data)) return data.data;
     if (Array.isArray(data.items)) return data.items;
     if (Array.isArray(data.lists)) return data.lists;
+    if (data.data && Array.isArray(data.data.resultList)) return data.data.resultList;
     if (Array.isArray(data)) return data; 
     if (data.data && Array.isArray(data.data.list)) return data.data.list;
     return [];
@@ -141,7 +142,7 @@ function extractListFromApiResponse(data) {
 function extractDicesFromItem(item) {
     if (!item) return null;
     if ('FirstDice' in item && 'SecondDice' in item && 'ThirdDice' in item) return [Number(item.FirstDice), Number(item.SecondDice), Number(item.ThirdDice)];
-    const keys = ['dices','dice','xuc_xac','xucsac','diceValue','dice_values','d'];
+    const keys = ['dices','dice','xuc_xac','xucsac','diceValue','dice_values','d', 'facesList'];
     for (const k of keys) {
         if (k in item && Array.isArray(item[k]) && item[k].length === 3) return item[k];
         if (k in item && typeof item[k] === 'string') {
@@ -374,7 +375,7 @@ function duDoanXucXacThanh(dices) {
     }
 }
 
-// ================= ENDPOINT CHÍNH (Đã Update Nhận Dữ Liệu Vượt Rào Của Hitclub) =================
+// ================= ENDPOINT CHÍNH (XỬ LÝ DỮ LIỆU TỪ CLIENT GỬI LÊN) =================
 app.post("/predict", antiSpam, async (req, res) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -395,7 +396,6 @@ app.post("/predict", antiSpam, async (req, res) => {
             if (dbKey.expire && dbKey.expire <= Date.now()) return res.json({ success: false, message: "❌ Key của bạn đã HẾT HẠN!", kicked: true });
         }
 
-        // Lấy dữ liệu từ gói gửi lên (Bao gồm dữ liệu Hitclub do Client tự cào gửi lên)
         const { source, seqLength, invertChain, game: clientGame, preFetchedChain, preFetchedDice } = req.body;
         
         let gameToFetch = decoded.game || 'lc79';
@@ -404,18 +404,25 @@ app.post("/predict", antiSpam, async (req, res) => {
         let chuoiN = [];
         let lastDice = [];
 
-        // NẾU CÓ DỮ LIỆU GỬI TỪ CLIENT (Dùng cho Hitclub vượt rào Cloudflare)
+        // ƯU TIÊN DÙNG DỮ LIỆU MÀ TRÌNH DUYỆT KHÁCH HÀNG TỰ CÀO (ĐỂ VƯỢT CLOUDFLARE)
         if (preFetchedChain && preFetchedChain.length > 0) {
             chuoiN = preFetchedChain;
             lastDice = preFetchedDice || [];
         } 
-        // NẾU KHÔNG THÌ TỰ ĐỘNG CÀO NHƯ CŨ (LC79, XD88, BETVIP, SUNWIN)
+        // NẾU KHÔNG CÓ THÌ SERVER MỚI TỰ ĐI LẤY (Dành cho LC79, XD88, Betvip)
         else {
             if (!API_URLS[gameToFetch]) return res.json({ success: false, message: "Game không hợp lệ!" });
             const apiUrl = API_URLS[gameToFetch][source || 'normal'];
             
             try {
-                const response = await fetch(apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'nocache=' + new Date().getTime());
+                // Thêm Headers giả lập trình duyệt để chống Block
+                const fetchUrl = apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'nocache=' + new Date().getTime();
+                const response = await fetch(fetchUrl, {
+                    headers: {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                        "Accept": "application/json, text/plain, */*"
+                    }
+                });
                 const data = await response.json();
                 
                 if (gameToFetch === 'sunwin') {
@@ -441,29 +448,21 @@ app.post("/predict", antiSpam, async (req, res) => {
                     lastDice = extractDicesFromItem(list[0]) || [];
                 }
             } catch(e) {
-                return res.json({ success: false, message: "Server Game chặn Server Tool. Hãy thử lại."});
+                return res.json({ success: false, message: "Server Game đang bảo trì hoặc chặn Server Tool."});
             }
         }
 
         let chainForAnalysis = chuoiN.slice();
         if(invertChain) chainForAnalysis = chainForAnalysis.map(c => c === 'T' ? 'X' : (c === 'X' ? 'T' : c));
 
-        // CHẠY SONG SONG CÁC LOGIC TỪ DỮ LIỆU ĐÃ CÓ
         const l1 = duDoanLogic1(chainForAnalysis);
         const l2 = duDoanLogic2(chainForAnalysis);
         const dice_result = duDoanXucXacThanh(lastDice);
 
-        res.json({ 
-            success: true, 
-            chuoiN, 
-            lastDice, 
-            logic1: l1,
-            logic2: l2,
-            dice: dice_result
-        });
+        res.json({ success: true, chuoiN, lastDice, logic1: l1, logic2: l2, dice: dice_result });
 
     } catch (err) {
-        return res.json({ success: false, message: "Phiên đăng nhập lỗi hoặc Server Game đang chặn kết nối.", kicked: true });
+        return res.json({ success: false, message: "Phiên đăng nhập lỗi.", kicked: true });
     }
 });
 
