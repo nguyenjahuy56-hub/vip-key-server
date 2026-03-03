@@ -124,8 +124,7 @@ const API_URLS = {
     lc79: { normal: "https://wtx.tele68.com/v1/tx/sessions?cp=R&cl=R&pf=web&at=4479e6332082ebf7f206ae3cfcd3ff5e", md5: "https://wtxmd52.tele68.com/v1/txmd5/sessions?cp=R&cl=R&pf=web&at=93b3e543d609af0351163f3ff9a2c495" },
     xd88: { normal: "https://taixiu.system32-cloudfare-356783752985678522.monster/api/luckydice/GetSoiCau", md5: "https://taixiumd5.system32-cloudfare-356783752985678522.monster/api/md5luckydice/GetSoiCau" },
     betvip: { normal: "https://wtx.macminim6.online/v1/tx/sessions?cp=R&cl=R&pf=web&at=f03c4feaa20161043de2006ec62b3439", md5: "https://wtxmd52.macminim6.online/v1/txmd5/sessions?cp=R&cl=R&pf=web&at=f03c4feaa20161043de2006ec62b3439" },
-    sunwin: { normal: "https://apisuntcbm.onrender.com/sunlon", md5: "https://apisuntcbm.onrender.com/sunlon" },
-    hitclub: { normal: "https://api.wsmt8g.cc/v2/history/getLastResult?gameId=ktrng_3932&size=120&tableId=39321215743193&curPage=1", md5: "https://api.wsmt8g.cc/v2/history/getLastResult?gameId=ktrng_3932&size=120&tableId=39321215743193&curPage=1" }
+    sunwin: { normal: "https://apisuntcbm.onrender.com/sunlon", md5: "https://apisuntcbm.onrender.com/sunlon" }
 };
 
 function extractListFromApiResponse(data) {
@@ -134,7 +133,6 @@ function extractListFromApiResponse(data) {
     if (Array.isArray(data.data)) return data.data;
     if (Array.isArray(data.items)) return data.items;
     if (Array.isArray(data.lists)) return data.lists;
-    if (data.data && Array.isArray(data.data.resultList)) return data.data.resultList; // Hỗ trợ Hitclub
     if (Array.isArray(data)) return data; 
     if (data.data && Array.isArray(data.data.list)) return data.data.list;
     return [];
@@ -143,7 +141,7 @@ function extractListFromApiResponse(data) {
 function extractDicesFromItem(item) {
     if (!item) return null;
     if ('FirstDice' in item && 'SecondDice' in item && 'ThirdDice' in item) return [Number(item.FirstDice), Number(item.SecondDice), Number(item.ThirdDice)];
-    const keys = ['dices','dice','xuc_xac','xucsac','diceValue','dice_values','d', 'facesList']; // Thêm facesList hỗ trợ Hitclub
+    const keys = ['dices','dice','xuc_xac','xucsac','diceValue','dice_values','d'];
     for (const k of keys) {
         if (k in item && Array.isArray(item[k]) && item[k].length === 3) return item[k];
         if (k in item && typeof item[k] === 'string') {
@@ -338,10 +336,7 @@ function duDoanLogic2(chuoi) {
 function duDoanXucXacThanh(dices) {
     if (!dices || dices.length !== 3) return { ket_qua: "Không rõ", tong: "?" };
     
-    // Quy tắc nhả: 1->5, 2->4, 3->6, 4->2, 5->1, 6->3
     const nha_map = {1: 5, 2: 4, 3: 6, 4: 2, 5: 1, 6: 3};
-    
-    // Lấy xúc xắc từ đít (d3) lên đầu (d1)
     let process_dice = [dices[2], dices[1], dices[0]]; 
     let new_dice = [];
     let force_tai = false;
@@ -351,10 +346,9 @@ function duDoanXucXacThanh(dices) {
     for (let i = 0; i < 3; i++) {
         let d = process_dice[i];
         if (seen_counts[d]) {
-            // Trùng lặp (ví dụ 333) -> trừ đi 1 từ lần nhả của con trước
             let next_val = last_mapped[d] - 1;
             if (next_val <= 0) {
-                force_tai = true; // Không nhả được nữa -> Đụng đáy 85% Tài
+                force_tai = true; 
                 new_dice.push(0);
             } else {
                 new_dice.push(next_val);
@@ -380,7 +374,7 @@ function duDoanXucXacThanh(dices) {
     }
 }
 
-// ================= ENDPOINT CHÍNH =================
+// ================= ENDPOINT CHÍNH (Đã Update Nhận Dữ Liệu Vượt Rào Của Hitclub) =================
 app.post("/predict", antiSpam, async (req, res) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -401,44 +395,60 @@ app.post("/predict", antiSpam, async (req, res) => {
             if (dbKey.expire && dbKey.expire <= Date.now()) return res.json({ success: false, message: "❌ Key của bạn đã HẾT HẠN!", kicked: true });
         }
 
-        const { source, seqLength, invertChain, game: clientGame } = req.body;
+        // Lấy dữ liệu từ gói gửi lên (Bao gồm dữ liệu Hitclub do Client tự cào gửi lên)
+        const { source, seqLength, invertChain, game: clientGame, preFetchedChain, preFetchedDice } = req.body;
+        
         let gameToFetch = decoded.game || 'lc79';
         if (gameToFetch === 'all') gameToFetch = clientGame || 'lc79';
-        if (!API_URLS[gameToFetch]) return res.json({ success: false, message: "Game không hợp lệ!" });
-
-        const apiUrl = API_URLS[gameToFetch][source || 'normal'];
-        const response = await fetch(apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'nocache=' + new Date().getTime());
-        const data = await response.json();
         
-        let chuoiN = [], lastDice = [];
+        let chuoiN = [];
+        let lastDice = [];
 
-        if (gameToFetch === 'sunwin') {
-            if (!data || !data.pattern) return res.json({success: false, message: "Lỗi kết nối API Sunwin."});
-            if (data.xuc_xac_1 && data.xuc_xac_2 && data.xuc_xac_3) lastDice = [Number(data.xuc_xac_1), Number(data.xuc_xac_2), Number(data.xuc_xac_3)];
-            let p = data.pattern.toUpperCase();
-            let selectedItems = p.slice(-(seqLength || 13)).split(''); 
-            chuoiN = selectedItems.map(c => c === 'T' ? 'T' : 'X');
-        } else {
-            const list = extractListFromApiResponse(data);
-            if (!list || list.length === 0) return res.json({success: false, message: "Lỗi kết nối API Game."});
-            let maxItems = Math.min(seqLength || 13, list.length);
-            let ketQuaTuApi = [];
-            for (let i = 0; i < maxItems; i++) {
-                let r = extractResultFromItem(list[i]);
-                if (!r) {
-                    const dices = extractDicesFromItem(list[i]);
-                    if (dices && dices.length===3) { r = (dices[0]+dices[1]+dices[2]) >= 11 ? 'T' : 'X'; } else r = 'X';
+        // NẾU CÓ DỮ LIỆU GỬI TỪ CLIENT (Dùng cho Hitclub vượt rào Cloudflare)
+        if (preFetchedChain && preFetchedChain.length > 0) {
+            chuoiN = preFetchedChain;
+            lastDice = preFetchedDice || [];
+        } 
+        // NẾU KHÔNG THÌ TỰ ĐỘNG CÀO NHƯ CŨ (LC79, XD88, BETVIP, SUNWIN)
+        else {
+            if (!API_URLS[gameToFetch]) return res.json({ success: false, message: "Game không hợp lệ!" });
+            const apiUrl = API_URLS[gameToFetch][source || 'normal'];
+            
+            try {
+                const response = await fetch(apiUrl + (apiUrl.includes('?') ? '&' : '?') + 'nocache=' + new Date().getTime());
+                const data = await response.json();
+                
+                if (gameToFetch === 'sunwin') {
+                    if (!data || !data.pattern) return res.json({success: false, message: "Lỗi kết nối API Sunwin."});
+                    if (data.xuc_xac_1 && data.xuc_xac_2 && data.xuc_xac_3) lastDice = [Number(data.xuc_xac_1), Number(data.xuc_xac_2), Number(data.xuc_xac_3)];
+                    let p = data.pattern.toUpperCase();
+                    let selectedItems = p.slice(-(seqLength || 13)).split(''); 
+                    chuoiN = selectedItems.map(c => c === 'T' ? 'T' : 'X');
+                } else {
+                    const list = extractListFromApiResponse(data);
+                    if (!list || list.length === 0) return res.json({success: false, message: "Lỗi kết nối API Game."});
+                    let maxItems = Math.min(seqLength || 13, list.length);
+                    let ketQuaTuApi = [];
+                    for (let i = 0; i < maxItems; i++) {
+                        let r = extractResultFromItem(list[i]);
+                        if (!r) {
+                            const dices = extractDicesFromItem(list[i]);
+                            if (dices && dices.length===3) { r = (dices[0]+dices[1]+dices[2]) >= 11 ? 'T' : 'X'; } else r = 'X';
+                        }
+                        ketQuaTuApi.push(r);
+                    }
+                    chuoiN = ketQuaTuApi.reverse(); 
+                    lastDice = extractDicesFromItem(list[0]) || [];
                 }
-                ketQuaTuApi.push(r);
+            } catch(e) {
+                return res.json({ success: false, message: "Server Game chặn Server Tool. Hãy thử lại."});
             }
-            chuoiN = ketQuaTuApi.reverse(); 
-            lastDice = extractDicesFromItem(list[0]) || [];
         }
 
         let chainForAnalysis = chuoiN.slice();
         if(invertChain) chainForAnalysis = chainForAnalysis.map(c => c === 'T' ? 'X' : (c === 'X' ? 'T' : c));
 
-        // CHẠY SONG SONG CÁC LOGIC
+        // CHẠY SONG SONG CÁC LOGIC TỪ DỮ LIỆU ĐÃ CÓ
         const l1 = duDoanLogic1(chainForAnalysis);
         const l2 = duDoanLogic2(chainForAnalysis);
         const dice_result = duDoanXucXacThanh(lastDice);
