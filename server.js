@@ -172,211 +172,228 @@ function extractResultFromItem(item) {
     return null;
 }
 
-// ================= THUẬT TOÁN LOGIC 1 (GIỮ NGUYÊN 100%) =================
-function nhanDienMauCau(chuoi) {
-    const str = chuoi.join("");
-    const len = str.length;
-    if (len < 4) return null;
-    const tail4 = str.slice(-4); const tail5 = str.slice(-5); const tail6 = str.slice(-6);
-    if (tail6 === "TXTXTX" || tail6 === "XTXTXT") return { ten: "Cầu 1-1 dài", du_doan: str[len-1] === "T" ? "X" : "T", diem: 5 };
-    if (tail5 === "TXTXT" || tail5 === "XTXTX") return { ten: "Cầu 1-1", du_doan: str[len-1] === "T" ? "X" : "T", diem: 4 };
-    if (tail6 === "TTXXTT") return { ten: "Cầu 2-2", du_doan: "X", diem: 4.5 };
-    if (tail6 === "XXTTXX") return { ten: "Cầu 2-2", du_doan: "T", diem: 4.5 };
-    if (tail5 === "TTXXT") return { ten: "Cầu 2-2", du_doan: "T", diem: 4 };
-    if (tail5 === "XXTTX") return { ten: "Cầu 2-2", du_doan: "X", diem: 4 };
-    if (tail4 === "TTXX") return { ten: "Cầu 2-2", du_doan: "T", diem: 3 };
-    if (tail4 === "XXTT") return { ten: "Cầu 2-2", du_doan: "X", diem: 3 };
-    if (tail6 === "TTTXXX") return { ten: "Cầu 3-3", du_doan: "T", diem: 4 };
-    if (tail6 === "XXXTTT") return { ten: "Cầu 3-3", du_doan: "X", diem: 4 };
-    if (tail5 === "TTXTT") return { ten: "Cầu 1-2-1 gãy", du_doan: "X", diem: 3 };
-    if (tail5 === "XXTXX") return { ten: "Cầu 1-2-1 gãy", du_doan: "T", diem: 3 };
-    if (tail4 === "TXXT") return { ten: "Cầu 1-2-1", du_doan: "X", diem: 3.5 };
-    if (tail4 === "XTTX") return { ten: "Cầu 1-2-1", du_doan: "T", diem: 3.5 };
-    if (tail6 === "TXXTTT" || tail5 === "XXTTT") return { ten: "Cầu tiến lên", du_doan: "X", diem: 4 };
-    if (tail6 === "XTTXXX" || tail5 === "TTXXX") return { ten: "Cầu tiến lên", du_doan: "T", diem: 4 };
-    if (tail6 === "TTTXXT") return { ten: "Cầu lùi 3-2-1", du_doan: "X", diem: 4 };
-    if (tail6 === "XXXTTX") return { ten: "Cầu lùi 3-2-1", du_doan: "T", diem: 4 };
-    if (tail5 === "TXXXT") return { ten: "Cầu 1-3-1", du_doan: "X", diem: 3 };
-    if (tail5 === "XTTTX") return { ten: "Cầu 1-3-1", du_doan: "T", diem: 3 };
-    return null;
-}
-function phatHienCauBip(chuoi){
-    const str = chuoi.join("");
-    if(str.endsWith("TTTTTT") || str.endsWith("XXXXXX")) return "Cầu bệt dài bất thường";
-    if(str.endsWith("TXTXX") || str.endsWith("XTXTT")) return "Cầu nhử đảo 1-1-2";
-    if(str.endsWith("TTTTX") || str.endsWith("XXXXT")) return "Cầu vừa bẻ bệt";
-    if(str.endsWith("TXXXXX") || str.endsWith("XTTTTT")) return "Bệt bám đuôi";
-    return null;
-}
-function phanTichChuoiWeighted(chuoi){
-    const n = chuoi.length;
-    if (n === 0) return { ptTai: 50, ptXiu: 50 };
-    const weights = Array.from({length: n}, (_, i) => i + 1);
-    const rev = [...chuoi].reverse();
-    let tai = 0, xiu = 0;
-    for(let i = 0; i < rev.length; i++){
-        const weight = weights[n - 1 - i]; 
-        if(rev[i] === "T") tai += weight;
-        if(rev[i] === "X") xiu += weight;
+// ================= THUẬT TOÁN LOGIC UPDATE TỪ FIKE =================
+const GOI_Y_NGUONG = [
+    [90, "Rất tự tin đặt"],
+    [70, "Nên đặt"],
+    [60, "Cân nhắc"]
+];
+
+const NGUONG_TY_LE = 5;
+
+function phanTichChuoiWeighted(chuoi) {
+    let weights = [];
+    for (let i = 0; i < chuoi.length; i++) {
+        weights.push(Math.pow(1.38, i));
     }
-    const total = weights.reduce((a, b) => a + b, 0);
-    return { ptTai: +(tai / total * 100).toFixed(1), ptXiu: +(xiu / total * 100).toFixed(1) };
+    let tong_weight = weights.reduce((a, b) => a + b, 0);
+    let tai = 0, xiu = 0;
+    for (let i = 0; i < chuoi.length; i++) {
+        if (chuoi[i] === "T") tai += weights[i];
+        if (chuoi[i] === "X") xiu += weights[i];
+    }
+    return {
+        ptTai: tong_weight === 0 ? 0 : parseFloat((tai / tong_weight * 100).toFixed(1)),
+        ptXiu: tong_weight === 0 ? 0 : parseFloat((xiu / tong_weight * 100).toFixed(1))
+    };
 }
-function demChuoiLienTiep(chuoi, ky_tu){
-    let count=0; for(let i=chuoi.length-1;i>=0;i--) { if(chuoi[i]===ky_tu) count++; else break; } return count;
+
+function goiYDat(du_doan, percent, chenh) {
+    for (let i = 0; i < GOI_Y_NGUONG.length; i++) {
+        let threshold = GOI_Y_NGUONG[i][0];
+        let message = GOI_Y_NGUONG[i][1];
+        if (percent >= threshold) {
+            if (percent < 70) {
+                return `${message} (vì tỷ lệ chưa cao hoặc chênh lệch nhỏ)`;
+            }
+            return message;
+        }
+    }
+    return "Bỏ qua";
 }
-function laCauDanXen(chuoi){
-    if(chuoi.length<6) return false;
-    for(let i=chuoi.length-6;i<chuoi.length-1;i++) if(chuoi[i]===chuoi[i+1]) return false;
+
+function demChuoiLienTiep(chuoi, ky_tu) {
+    let count = 0;
+    for (let i = chuoi.length - 1; i >= 0; i--) {
+        if (chuoi[i] === ky_tu) count++;
+        else break;
+    }
+    return count;
+}
+
+function phanTichChuKy(chuoi) {
+    for (let l of [5, 4, 3, 2]) {
+        if (chuoi.length >= 2 * l) {
+            let p1 = chuoi.slice(-l).join("");
+            let p2 = chuoi.slice(-2 * l, -l).join("");
+            if (p1 === p2) return chuoi[chuoi.length - 1];
+        }
+    }
+    return null;
+}
+
+function laCauDanXen(chuoi) {
+    if (chuoi.length < 6) return false;
+    for (let i = chuoi.length - 6; i < chuoi.length - 1; i++) {
+        if (chuoi[i] === chuoi[i+1]) return false;
+    }
     return true;
 }
-function phanTichChuKy(chuoi){
-    for(const l of [5,4,3,2]){
-        if(chuoi.length>=2*l && chuoi.slice(-l).join("")===chuoi.slice(-2*l,-l).join("")) return chuoi[chuoi.length-1];
-    } return null;
-}
-function duDoanLogic1(chuoi){
-    const {ptTai, ptXiu} = phanTichChuoiWeighted(chuoi);
-    let diem_tai = 0, diem_xiu = 0;
-    const ck = phanTichChuKy(chuoi);
-    if(ck === "T") diem_tai += 2.5; 
-    if(ck === "X") diem_xiu += 2.5;
-    const mauCau = nhanDienMauCau(chuoi);
-    if (mauCau) {
-        if (mauCau.du_doan === "T") diem_tai += mauCau.diem;
-        if (mauCau.du_doan === "X") diem_xiu += mauCau.diem;
-    } else {
-        if(laCauDanXen(chuoi)) { 
-            if(chuoi[chuoi.length-1] === "T") diem_xiu += 3; else diem_tai += 3; 
-        }
-    }
-    const lt_t = demChuoiLienTiep(chuoi, "T"), lt_x = demChuoiLienTiep(chuoi, "X");
-    if (lt_t >= 3) { if (lt_t <= 5) diem_tai += 3.5; else if (lt_t >= 7) diem_xiu += 4.5; }
-    if (lt_x >= 3) { if (lt_x <= 5) diem_xiu += 3.5; else if (lt_x >= 7) diem_tai += 4.5; }
-    diem_tai += ptTai / 20; 
-    diem_xiu += ptXiu / 20;
-    let ket_qua = "Không rõ";
-    if (Math.abs(diem_tai - diem_xiu) > 0.5) ket_qua = diem_tai > diem_xiu ? "Tài" : "Xỉu";
-    return { ket_qua, ptTai, ptXiu, cau_bip: phatHienCauBip(chuoi) };
-}
 
-// ================= THUẬT TOÁN LOGIC 2 (TỪ FILE OKI.PY) =================
-const CONFIG_OKI = {
-    NGUONG_TY_LE: 3, DIEM_MAU_CAU: 4.0, DIEM_CHU_KY: 3.0, 
-    DIEM_CAU_BET: 2.0, DIEM_CAU_1_1: 4.0, HE_SO_PERCENT: 8.0, HE_SO_LICH_SU: 0.8
-};
-const mau_cau_oki = {
-    "TTXXT": "T", "XXTTX": "X", "TXXTX": "T", "XTTXT": "X", "TXT": "X", "XTX": "T", "TTX": "X", "XXT": "T",
-    "TXTXTX": "X", "XTXTXT": "T", "TXTXT": "X", "XTXTT": "T", "TTTXX": "T", "XXXT": "X", "TXXXT": "T", "XTTTX": "X",
-    "TXTTX": "X", "XTXTX": "T", "TTXTX": "X", "XXTXT": "T", "TXXTXT": "T", "XTTXTX": "X", "TTXTT": "T", "XXTXX": "X",
-    "TTTTTTT": "T", "XXXXXXX": "X", "TXTXTXTX": "T", "XTXTXTXT": "X", "TTXXTTXX": "T", "XXTTXXTT": "X",
-    "TTTXXXTTT": "T", "XXXTTTXXX": "X", "TTTTTX": "T", "XXXXTX": "X", "TTXXTT": "X", "XXTTXX": "T", "TXXTXX": "T", "XTTXTT": "X"
-};
-function phan_tich_chuoi_weighted_oki(chuoi) {
-    let weights = [];
-    for (let i = 0; i < chuoi.length; i++) weights.push(Math.pow(2, i));
-    let tong_weight = weights.reduce((a,b) => a+b, 0);
-    let chuoi_rev = [...chuoi].reverse();
-    let tai = 0, xiu = 0;
-    for (let i = 0; i < chuoi_rev.length; i++) {
-        if (chuoi_rev[i] === "T") tai += weights[i];
-        if (chuoi_rev[i] === "X") xiu += weights[i];
+function phatHienCauBip(chuoi) {
+    let seq = chuoi.join("");
+    if (seq.length >= 6 && (seq.endsWith("TTTTTT") || seq.endsWith("XXXXXX"))) {
+        return "Cầu bệt dài bất thường";
     }
-    if (tong_weight === 0) return { ptTai: 50.0, ptXiu: 50.0 };
-    return { ptTai: parseFloat((tai / tong_weight * 100).toFixed(1)), ptXiu: parseFloat((xiu / tong_weight * 100).toFixed(1)) };
-}
-function phat_hien_cau_bip_oki(chuoi) {
-    const str = chuoi.join("");
-    if (str.endsWith("TTTTTT") || str.endsWith("XXXXXX")) return "Cầu bệt dài > 6 (Dễ gãy hoặc bệt tiếp)";
-    if (str.endsWith("TXTXX") || str.endsWith("XTXTT")) return "Cầu nhử đảo 1-1-2 (Dễ chết ở nhịp 3)";
-    if (str.endsWith("TXXTXT")) return "Cầu bẫy lặp đều (Coi chừng đổi thuật toán)";
-    if (str.endsWith("TXTXTXTX") || str.endsWith("XTXTXTXT")) return "Ping-pong dài (Chuẩn bị gãy cầu 1-1)";
+    if (seq.length >= 5 && (seq.endsWith("TXTXX") || seq.endsWith("XTXTT"))) {
+        return "Cầu nhử đảo 1-1-2";
+    }
+    if (seq.endsWith("TXXTXT")) {
+        return "Cầu bẫy lặp đều";
+    }
     return null;
 }
-function duDoanLogic2(chuoi) {
-    let { ptTai, ptXiu } = phan_tich_chuoi_weighted_oki(chuoi);
+
+function duDoanTuChuoi(chuoi) {
+    let {ptTai, ptXiu} = phanTichChuoiWeighted(chuoi);
     let diem_tai = 0, diem_xiu = 0;
-    for (let l = 7; l > 2; l--) {
+
+    for (let l = 7; l >= 3; l--) {
         if (chuoi.length >= l) {
-            const tailStr = chuoi.slice(-l).join("");
-            if (tailStr === "T".repeat(l)) { diem_tai += (l - 2) * CONFIG_OKI.DIEM_CAU_BET; break; }
-            else if (tailStr === "X".repeat(l)) { diem_xiu += (l - 2) * CONFIG_OKI.DIEM_CAU_BET; break; }
+            let tailStr = chuoi.slice(-l).join("");
+            if (tailStr === "T".repeat(l)) diem_tai += (l - 2) * 2;
+            else if (tailStr === "X".repeat(l)) diem_xiu += (l - 2) * 2;
         }
     }
-    const ck = phanTichChuKy(chuoi); 
-    if (ck === "T") diem_tai += CONFIG_OKI.DIEM_CHU_KY;
-    else if (ck === "X") diem_xiu += CONFIG_OKI.DIEM_CHU_KY;
+
+    let ck = phanTichChuKy(chuoi);
+    if (ck === "T") diem_tai += 5;
+    else if (ck === "X") diem_xiu += 5;
+
     if (laCauDanXen(chuoi)) {
-        if (chuoi[chuoi.length - 1] === "T") diem_xiu += CONFIG_OKI.DIEM_CAU_1_1;
-        else diem_tai += CONFIG_OKI.DIEM_CAU_1_1;
+        if (chuoi[chuoi.length - 1] === "T") diem_xiu += 4;
+        else diem_tai += 4;
     }
-    const tail8 = chuoi.slice(-8).join("");
-    for (const [k, v] of Object.entries(mau_cau_oki)) {
-        if (tail8.endsWith(k)) {
-            if (v === "T") diem_tai += CONFIG_OKI.DIEM_MAU_CAU;
-            else diem_xiu += CONFIG_OKI.DIEM_MAU_CAU;
-        }
-    }
-    if (ptTai > ptXiu + CONFIG_OKI.NGUONG_TY_LE) diem_tai += 3;
-    else if (ptXiu > ptTai + CONFIG_OKI.NGUONG_TY_LE) diem_xiu += 3;
-    const countT = chuoi.filter(c => c === "T").length;
-    const countX = chuoi.filter(c => c === "X").length;
-    if (countT >= CONFIG_OKI.HE_SO_LICH_SU * chuoi.length) diem_tai += 2;
-    else if (countX >= CONFIG_OKI.HE_SO_LICH_SU * chuoi.length) diem_xiu += 2;
-    diem_tai += ptTai / CONFIG_OKI.HE_SO_PERCENT;
-    diem_xiu += ptXiu / CONFIG_OKI.HE_SO_PERCENT;
 
-    let ket_qua = "Không rõ";
-    if (diem_tai > diem_xiu + 1.5) ket_qua = "Tài";
-    else if (diem_xiu > diem_tai + 1.5) ket_qua = "Xỉu";
-    return { ket_qua, ptTai, ptXiu, cau_bip: phat_hien_cau_bip_oki(chuoi) };
-}
-
-// ================= THUẬT TOÁN XÚC XẮC (CÔNG THỨC THÀNH SUNWIN) =================
-function duDoanXucXacThanh(dices) {
-    if (!dices || dices.length !== 3) return { ket_qua: "Không rõ", tong: "?" };
-    
-    // Quy tắc nhả: 1->5, 2->4, 3->6, 4->2, 5->1, 6->3
-    const nha_map = {1: 5, 2: 4, 3: 6, 4: 2, 5: 1, 6: 3};
-    
-    // Lấy xúc xắc từ đít (d3) lên đầu (d1)
-    let process_dice = [dices[2], dices[1], dices[0]]; 
-    let new_dice = [];
-    let force_tai = false;
-    let seen_counts = {};
-    let last_mapped = {};
-
-    for (let i = 0; i < 3; i++) {
-        let d = process_dice[i];
-        if (seen_counts[d]) {
-            // Trùng lặp (ví dụ 333) -> trừ đi 1 từ lần nhả của con trước
-            let next_val = last_mapped[d] - 1;
-            if (next_val <= 0) {
-                force_tai = true; // Không nhả được nữa -> Đụng đáy 85% Tài
-                new_dice.push(0);
-            } else {
-                new_dice.push(next_val);
-                last_mapped[d] = next_val;
-            }
-            seen_counts[d]++;
-        } else {
-            let mapped_val = nha_map[d] || 1;
-            new_dice.push(mapped_val);
-            last_mapped[d] = mapped_val;
-            seen_counts[d] = 1;
+    let tail = chuoi.slice(-5).join("");
+    let mau_cau = {
+        "TTXXT": "T", "XXTTX": "X", 
+        "TXXTX": "T", "XTTXT": "X",
+        "TXT": "X", "XTX": "T", 
+        "TTX": "X", "XXT": "T"
+    };
+    for (let k in mau_cau) {
+        if (tail.endsWith(k)) {
+            if (mau_cau[k] === "T") diem_tai += 4;
+            else diem_xiu += 4;
         }
     }
 
-    if (force_tai) {
-        return { ket_qua: "Tài", tong: "Max (85% Tài)" };
-    } else {
-        let predicted_sum = new_dice[0] + new_dice[1] + new_dice[2];
-        return { 
-            ket_qua: (predicted_sum >= 11 && predicted_sum <= 17) ? 'Tài' : 'Xỉu', 
-            tong: predicted_sum 
-        };
+    if (ptTai > ptXiu + NGUONG_TY_LE) diem_tai += 4;
+    else if (ptXiu > ptTai + NGUONG_TY_LE) diem_xiu += 4;
+
+    let countT = chuoi.filter(x => x === "T").length;
+    let countX = chuoi.filter(x => x === "X").length;
+    if (countT >= 0.6 * chuoi.length) diem_tai += 2;
+    else if (countX >= 0.6 * chuoi.length) diem_xiu += 2;
+
+    let lt_t = demChuoiLienTiep(chuoi, "T");
+    let lt_x = demChuoiLienTiep(chuoi, "X");
+    if (lt_t >= 3) diem_tai += Math.pow(2, lt_t - 2);
+    if (lt_x >= 3) diem_xiu += Math.pow(2, lt_x - 2);
+
+    diem_tai += ptTai / 10;
+    diem_xiu += ptXiu / 10;
+
+    if (chuoi.length >= 6) {
+        let recent_patterns = [];
+        for (let i = 0; i <= chuoi.length - 3; i++) {
+            recent_patterns.push(chuoi.slice(i, i+3));
+        }
+        let count_t_pat = 0, count_x_pat = 0;
+        for(let p of recent_patterns) {
+            if(p.filter(x=>x==="T").length >= 2) count_t_pat++;
+            if(p.filter(x=>x==="X").length >= 2) count_x_pat++;
+        }
+        if (count_t_pat > count_x_pat + 2) diem_tai += 3;
+        else if (count_x_pat > count_t_pat + 2) diem_xiu += 3;
     }
+
+    if (lt_t >= 3) diem_xiu += lt_t;
+    else if (lt_x >= 3) diem_tai += lt_x;
+
+    if (chuoi.length >= 8) {
+        let last4 = chuoi.slice(-4);
+        if (last4.slice(0, 2).join("") === last4.slice(2).join("")) {
+            if (last4[3] === "T") diem_tai += 2.5;
+            else diem_xiu += 2.5;
+        }
+    }
+
+    let chenh = Math.abs(ptTai - ptXiu);
+    if (chenh < 3) {
+        if (chuoi[chuoi.length - 1] === "T") diem_xiu += 2;
+        else diem_tai += 2;
+    }
+
+    if (diem_tai > diem_xiu + 1) return { kq_chuoi: "Tài", pt: ptTai, px: ptXiu };
+    else if (diem_xiu > diem_tai + 1) return { kq_chuoi: "Xỉu", pt: ptTai, px: ptXiu };
+    return { kq_chuoi: "Không rõ", pt: ptTai, px: ptXiu };
 }
+
+function duDoanTuXucXac(x1, x2, x3) {
+    const bang_nha = {1: 5, 2: 4, 3: 6, 4: 2, 5: 1, 6: 3};
+    const xuc_xac_goc = [x1, x2, x3];
+    let xuc_xac_moi = [];
+    let dem_trung = {};
+
+    const reversed_goc = [...xuc_xac_goc].reverse();
+    for (let xx of reversed_goc) {
+        let so_nha = bang_nha[xx] !== undefined ? bang_nha[xx] : xx;
+        let tru_di = dem_trung[xx] || 0;
+        
+        let kq_nha = so_nha - tru_di;
+        xuc_xac_moi.push(kq_nha);
+        
+        dem_trung[xx] = tru_di + 1;
+    }
+
+    if (xuc_xac_moi.some(v => v < 1)) {
+        return { kq_xx: "Tài", tong_xx: "Hết số nhả -> 85% Tài" };
+    }
+
+    let tong = xuc_xac_moi.reduce((a, b) => a + b, 0);
+    let chuoi_nha = xuc_xac_moi.join("");
+    let thong_tin_tong = `${tong} (Nhả ra: ${chuoi_nha})`;
+    
+    if (tong >= 11 && tong <= 17) return { kq_xx: "Tài", tong_xx: thong_tin_tong };
+    if (tong >= 4 && tong <= 10) return { kq_xx: "Xỉu", tong_xx: thong_tin_tong };
+    return { kq_xx: "Không rõ", tong_xx: thong_tin_tong };
+}
+
+function duDoanTongHop(chuoi, xuc_xac) {
+    let { kq_chuoi, pt, px } = duDoanTuChuoi(chuoi);
+    let kq_xx = "Không rõ", tong_xx = null;
+    
+    if (xuc_xac && xuc_xac.length === 3) {
+        let res_xx = duDoanTuXucXac(xuc_xac[0], xuc_xac[1], xuc_xac[2]);
+        kq_xx = res_xx.kq_xx;
+        tong_xx = res_xx.tong_xx;
+    }
+
+    let ket_qua;
+    if (kq_chuoi === kq_xx && kq_chuoi !== "Không rõ") ket_qua = kq_chuoi;
+    else if (kq_chuoi !== "Không rõ" && kq_xx === "Không rõ") ket_qua = kq_chuoi;
+    else if (kq_chuoi === "Không rõ" && kq_xx !== "Không rõ") ket_qua = kq_xx;
+    else ket_qua = "Không rõ";
+
+    return {
+        ket_qua: ket_qua,
+        phan_tich_chuoi: { kq_chuoi, pt, px },
+        phan_tich_xuc_xac: { kq_xx, tong_xx }
+    };
+}
+
 
 // ================= ENDPOINT CHÍNH =================
 app.post("/predict", antiSpam, async (req, res) => {
@@ -436,18 +453,32 @@ app.post("/predict", antiSpam, async (req, res) => {
         let chainForAnalysis = chuoiN.slice();
         if(invertChain) chainForAnalysis = chainForAnalysis.map(c => c === 'T' ? 'X' : (c === 'X' ? 'T' : c));
 
-        // CHẠY SONG SONG CÁC LOGIC
-        const l1 = duDoanLogic1(chainForAnalysis);
-        const l2 = duDoanLogic2(chainForAnalysis);
-        const dice_result = duDoanXucXacThanh(lastDice);
+        // CHẠY LOGIC TỔNG HỢP MỚI TỪ FIKE
+        const ket_qua_tong_hop = duDoanTongHop(chainForAnalysis, lastDice);
+        const { kq_chuoi, pt, px } = ket_qua_tong_hop.phan_tich_chuoi;
+        const { kq_xx, tong_xx } = ket_qua_tong_hop.phan_tich_xuc_xac;
+
+        const cau_bip = phatHienCauBip(chainForAnalysis);
+        const chenh = Math.abs(pt - px);
+        const max_percent = Math.max(pt, px);
+        const goi_y = goiYDat(kq_chuoi, max_percent, chenh);
 
         res.json({ 
             success: true, 
             chuoiN, 
             lastDice, 
-            logic1: l1,
-            logic2: l2,
-            dice: dice_result
+            ket_qua_du_doan: ket_qua_tong_hop.ket_qua,
+            logic_chuoi: {
+                ket_qua: kq_chuoi,
+                ty_le_tai: pt,
+                ty_le_xiu: px,
+                cau_bip: cau_bip,
+                goi_y: goi_y
+            },
+            logic_xuc_xac: {
+                ket_qua: kq_xx,
+                chi_tiet: tong_xx
+            }
         });
 
     } catch (err) {
