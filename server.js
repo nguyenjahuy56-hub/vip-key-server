@@ -184,7 +184,7 @@ const NGUONG_TY_LE = 5;
 function phanTichChuoiWeighted(chuoi) {
     let weights = [];
     for (let i = 0; i < chuoi.length; i++) {
-        weights.push(Math.pow(1.38, i));
+        weights.push(Math.pow(1.3, i));
     }
     let tong_weight = weights.reduce((a, b) => a + b, 0);
     let tai = 0, xiu = 0;
@@ -543,3 +543,4 @@ async function resetKey(key){
 app.listen(PORT, () => {
     console.log("Server chạy tại cổng: " + PORT);
 });
+
