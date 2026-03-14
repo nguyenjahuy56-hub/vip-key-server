@@ -184,7 +184,7 @@ const NGUONG_TY_LE = 5;
 function phanTichChuoiWeighted(chuoi) {
     let weights = [];
     for (let i = 0; i < chuoi.length; i++) {
-        weights.push(Math.pow(1.25, i));
+        weights.push(Math.pow(1.25, i - (chuoi.length - 1)));
     }
     let tong_weight = weights.reduce((a, b) => a + b, 0);
     let tai = 0, xiu = 0;
@@ -275,32 +275,25 @@ function duDoanTuChuoi(chuoi) {
         else diem_tai += 4;
     }
 
-    let tail = chuoi.slice(-8).join(""); // Tăng lùi 8 tay để bắt trọn mẫu cầu dài
+    let tail = chuoi.slice(-8).join("");
     let mau_cau = {
-        // Mẫu cơ bản 1-1, 2-2
         "TXT": "X", "XTX": "T",
         "TXTXT": "X", "XTXTX": "T",
         "TTXX": "T", "XXTT": "X",
         "TTXXT": "T", "XXTTX": "X",
         "TTXXTT": "X", "XXTTXX": "T",
-        // Mẫu 1-2-1, 2-1-2
         "TXXT": "X", "XTTX": "T",
         "TTXTT": "X", "XXTXX": "T",
         "TXXTX": "T", "XTTXT": "X",
-        // Mẫu 1-3-1
         "TXXXT": "X", "XTTTX": "T",
-        // Mẫu 3-3
         "TTTXXX": "T", "XXXTTT": "X",
-        // Mẫu tiến 1-2-3 / Lùi 3-2-1
         "TXXTTT": "X", "XTTXXX": "T",
         "TTTXXT": "X", "XXXTTX": "T",
-        // Điểm gãy lừa (vừa gãy bệt xong dễ hồi lại hoặc nhảy 1-1)
         "TTX": "X", "XXT": "T"
     };
     
     for (let k in mau_cau) {
         if (tail.endsWith(k)) {
-            // FIX: Giữ nguyên trọng số thấp (1.5) để an toàn trước bẫy nhà cái
             if (mau_cau[k] === "T") diem_tai += 1.5;
             else diem_xiu += 1.5;
         }
@@ -461,7 +454,6 @@ app.post("/predict", antiSpam, async (req, res) => {
         let chainForAnalysis = chuoiN.slice();
         if(invertChain) chainForAnalysis = chainForAnalysis.map(c => c === 'T' ? 'X' : (c === 'X' ? 'T' : c));
 
-        // CHẠY LOGIC TỔNG HỢP SAU KHI FIX
         const ket_qua_tong_hop = duDoanTongHop(chainForAnalysis, lastDice);
         const { kq_chuoi, pt, px } = ket_qua_tong_hop.phan_tich_chuoi;
         const { kq_xx, tong_xx } = ket_qua_tong_hop.phan_tich_xuc_xac;
@@ -551,4 +543,3 @@ async function resetKey(key){
 app.listen(PORT, () => {
     console.log("Server chạy tại cổng: " + PORT);
 });
-
